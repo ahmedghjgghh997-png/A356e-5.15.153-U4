@@ -1,150 +1,136 @@
 #!/bin/bash
 # ============================================================
-# سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380) مروت بـ KernelSU
-# إصدار: 2.0 (دعم روابط Google Drive وتحسين التجميع)
+# سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380) - نسخة Khalifa
+# مدمج به: KernelSU + تخطي حماية سامسونج + دعم Google Drive
 # ============================================================
 
 set -e
 
 # الألوان
-RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
+RED='\033[0;31m'
 NC='\033[0m'
 
-log() { echo -e "${GREEN}[INFO]${NC} $1" | tee -a "$LOG_FILE"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $1" | tee -a "$LOG_FILE"; }
-error() { echo -e "${RED}[ERROR]${NC} $1" | tee -a "$LOG_FILE"; exit 1; }
+log() { echo -e "${GREEN}[INFO]${NC} $1"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
-# متغيرات عامة
+# 1. تعريف المسارات
 export ARCH=arm64
 export KERNEL_ROOT="$(pwd)/kernel-source"
 export TOOLCHAINS_DIR="$HOME/toolchains"
 export BUILD_DIR="$KERNEL_ROOT/build"
-export LOG_FILE="$PWD/build.log"
+export KBUILD_BUILD_USER="Khalifa"
+export KBUILD_BUILD_HOST="Android-Build"
 
-# ========== 1. إدخال الروابط (من GitHub Actions أو يدوي) ==========
+# 2. الحصول على الروابط (من GitHub Actions)
 if [ -n "$GITHUB_ACTIONS" ]; then
     KERNEL_URL="$INPUT_KERNEL_URL"
     BOOT_URL="$INPUT_BOOT_URL"
 else
-    echo -e "${GREEN}=== الخطوة 1: إدخال الروابط ===${NC}"
-    read -p "رابط سورس النواة (Drive أو GitHub): " KERNEL_URL
-    read -p "رابط boot.img الأصلي (مهم للروت): " BOOT_URL
+    read -p "رابط السورس: " KERNEL_URL
+    read -p "رابط boot.img الأصلي (اختياري): " BOOT_URL
 fi
 
-[ -z "$KERNEL_URL" ] && error "رابط السورس مطلوب."
-
-# ========== 2. تثبيت التبعيات ==========
-log "تثبيت التبعيات..."
+# 3. تثبيت التبعيات الضرورية
+log "تثبيت الأدوات والتبعيات..."
 sudo apt update && sudo apt install -y bc bison build-essential curl git git-lfs \
-    libelf-dev libssl-dev lz4 python3 python3-pip zip zstd clang lld wget unzip
+    libelf-dev libssl-dev lz4 python3 python3-pip zip zstd clang lld wget unzip gdown
 
-# ========== 3. تحضير سلاسل الأدوات (Clang 17) ==========
+# 4. تحضير سلاسل الأدوات (Clang r450784e - اللي كانت شغالة معاك)
+log "تحضير سلاسل الأدوات..."
 mkdir -p "$TOOLCHAINS_DIR"
-if [ ! -d "$TOOLCHAINS_DIR/clang" ]; then
-    log "تحميل Clang المخصص للأندرويد..."
+if [ ! -d "$TOOLCHAINS_DIR/clang-r450784e" ]; then
     cd "$TOOLCHAINS_DIR"
-    curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r522817.tar.gz" -o clang.tar.gz
-    mkdir clang && tar -xzf clang.tar.gz -C clang && rm clang.tar.gz
+    wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/722c840a8e4d58b5ebdab62ce78eacdafd301208/clang-r450784e.tar.gz
+    mkdir clang-r450784e && tar -xf clang-r450784e.tar.gz -C clang-r450784e
+    rm clang-r450784e.tar.gz
     cd - >/dev/null
 fi
 
-export PATH="$TOOLCHAINS_DIR/clang/bin:$PATH"
+export PATH="$TOOLCHAINS_DIR/clang-r450784e/bin:$PATH"
 export CLANG_TRIPLE=aarch64-linux-gnu-
 export CROSS_COMPILE=aarch64-linux-gnu-
 
-# ========== 4. تحميل سورس النواة (معالجة ذكية للروابط) ==========
+# 5. تحميل سورس النواة (دعم ذكي لجوجل درايف)
+log "جاري تحميل سورس النواة..."
 rm -rf "$KERNEL_ROOT" && mkdir -p "$KERNEL_ROOT"
 cd "$KERNEL_ROOT"
-log "جاري تحميل سورس النواة..."
 
-download_from_drive() {
-    local URL=$1
-    local FILE_ID=$(echo $URL | sed -r 's/.*\/d\/([a-zA-Z0-9_-]+).*/\1/; s/.*id=([a-zA-Z0-9_-]+).*/\1/')
-    log "جاري التحميل من Google Drive (ID: $FILE_ID)..."
-    # استخدام gdown إذا كان متاحاً، وإلا فاستخدام curl
-    pip3 install gdown --quiet || true
-    if command -v gdown &> /dev/null; then
-        gdown "$FILE_ID" -O src.zip
-    else
-        curl -L "https://docs.google.com/uc?export=download&id=${FILE_ID}" -o src.zip
-    fi
-}
-
-if [[ "$KERNEL_URL" == *github.com* || "$KERNEL_URL" == *.git ]]; then
-    log "تم اكتشاف مستودع Git..."
+if [[ "$KERNEL_URL" == *drive.google.com* ]]; then
+    ID=$(echo "$KERNEL_URL" | sed -r 's/.*\/d\/([a-zA-Z0-9_-]+).*/\1/; s/.*id=([a-zA-Z0-9_-]+).*/\1/')
+    gdown "$ID" -O src.zip
+    unzip -q src.zip || tar -xf src.zip
+elif [[ "$KERNEL_URL" == *.git ]]; then
     git clone --depth=1 "$KERNEL_URL" .
-elif [[ "$KERNEL_URL" == *drive.google.com* ]]; then
-    download_from_drive "$KERNEL_URL"
-    log "فك ضغط الملف..."
-    if unzip -q src.zip; then rm src.zip; elif tar -xf src.zip; then rm src.zip; fi
 else
-    log "تحميل مباشر..."
     curl -L "$KERNEL_URL" -o src.archive
-    if unzip -q src.archive; then rm src.archive; else tar -xf src.archive && rm src.archive; fi
+    tar -xf src.archive --strip-components=1 || unzip src.archive
 fi
 
-# التأكد من نجاح التحميل وفك الضغط
-[ -f "Makefile" ] || error "لم يتم العثور على Makefile. تأكد من الرابط ومحتوى الملف."
+# 6. تنظيف الـ Makefile من الـ Wrappers (لحل Error 2 فيDrivers)
+log "تنظيف Makefile من قيود سامسونج..."
+sed -i 's/gcc-wrapper.py//g' Makefile
+sed -i 's/clang-wrapper.py//g' Makefile
+for opt in REAL_CC CFP_CC wrapper; do
+    sed -i "/$opt/d" Makefile
+done
 
-# ========== 5. دمج KernelSU (الروت) ==========
-log "جاري دمج كود KernelSU..."
+# 7. حقن كود KernelSU (الروت)
+log "دمج كود KernelSU في النواة..."
 curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
-# ========== 6. تحضير الـ Defconfig ==========
-DEFCONFIG="s5e8835-a35xjvxx_defconfig"
-log "تجهيز الإعدادات ($DEFCONFIG)..."
-make ARCH=arm64 CC=clang $DEFCONFIG
+# 8. تجهيز الـ Config وتخصيصه
+log "تجهيز الإعدادات وتعطيل الحماية..."
+export TARGET_SOC=s5e8835
+make ARCH=arm64 CC=clang s5e8835-a35xjvxx_defconfig
 
-# تفعيل إعدادات الروت والحماية
+# تفعيل الروت + تعطيل حماية سامسونج (RKP, KNOX, PROCA)
 scripts/config --file ".config" \
     -e CONFIG_KSU \
     -e CONFIG_OVERLAY_FS \
     -e CONFIG_KPROBES \
     -e CONFIG_KPROBE_EVENTS \
+    --set-str CONFIG_LOCALVERSION "-Khalifa-$(date +%Y%m%d)" \
     -d CONFIG_UH -d CONFIG_UH_RKP -d CONFIG_RKP_CFP \
-    -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE \
-    -d CONFIG_MODULE_SIG_FORCE
+    -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE
 
-# ========== 7. التجميع (Building) ==========
-log "بدء التجميع..."
+# 9. عملية البناء الشاملة (Image + dtbs)
+log "بدء التجميع النهائي (هذه العملية تستغرق وقتاً)..."
 make -j$(nproc) ARCH=arm64 CC=clang \
     CROSS_COMPILE=aarch64-linux-gnu- \
     CLANG_TRIPLE=aarch64-linux-gnu- \
-    Image 2>&1 | tee -a "$LOG_FILE"
+    Image dtbs
 
-if [ ! -f "arch/arm64/boot/Image" ]; then
-    error "فشل التجميع! راجع build.log"
-fi
-
-# ========== 8. صناعة boot.img الـ Rooted ==========
-if [ -n "$BOOT_URL" ]; then
-    log "بدء عملية حقن النواة المروتة..."
-    mkdir -p "$BUILD_DIR"
-    
-    if [[ "$BOOT_URL" == *drive.google.com* ]]; then
-        FILE_ID=$(echo $BOOT_URL | sed -r 's/.*\/d\/([a-zA-Z0-9_-]+).*/\1/; s/.*id=([a-zA-Z0-9_-]+).*/\1/')
-        pip3 install gdown --quiet || true
-        gdown "$FILE_ID" -O "$BUILD_DIR/stock_boot.img"
-    else
-        curl -L -o "$BUILD_DIR/stock_boot.img" "$BOOT_URL"
-    fi
-
-    # تحميل magiskboot
-    curl -L "https://github.com/magisk-modules-alt-repo/magiskboot_x86_64/raw/main/magiskboot" -o magiskboot
-    chmod +x magiskboot
-    
-    cp arch/arm64/boot/Image .
-    ./magiskboot unpack "$BUILD_DIR/stock_boot.img"
-    mv Image kernel
-    ./magiskboot repack "$BUILD_DIR/stock_boot.img" "$BUILD_DIR/rooted_boot.img"
-    
-    log "تم إنشاء الملف النهائي: $BUILD_DIR/rooted_boot.img"
-else
+# 10. التحقق وجمع المخرجات
+if [ -f "arch/arm64/boot/Image" ]; then
+    log "مبروك! تم بناء النواة بنجاح."
     mkdir -p "$BUILD_DIR"
     cp arch/arm64/boot/Image "$BUILD_DIR/"
-    warn "تم بناء النواة فقط (Image) بدون ملف Boot."
+    # نسخ ملفات الـ DTB لأنها مهمة جداً لـ Exynos
+    find arch/arm64/boot/dts/samsung/ -name "*.dtb" -exec cp {} "$BUILD_DIR/" \;
+else
+    error "فشل التجميع. يرجى مراجعة سجلات البناء."
 fi
 
-log "انتهى السكريبت بنجاح."
+# 11. دمج النواة في boot.img (إذا توفر الرابط)
+if [ -n "$BOOT_URL" ]; then
+    log "جاري إنشاء boot.img المروت..."
+    cd "$BUILD_DIR"
+    if [[ "$BOOT_URL" == *drive.google.com* ]]; then
+        ID_BOOT=$(echo "$BOOT_URL" | sed -r 's/.*\/d\/([a-zA-Z0-9_-]+).*/\1/; s/.*id=([a-zA-Z0-9_-]+).*/\1/')
+        gdown "$ID_BOOT" -O stock_boot.img
+    else
+        curl -L "$BOOT_URL" -o stock_boot.img
+    fi
+    
+    # تحميل magiskboot للـ Repack
+    wget -q https://github.com/magisk-modules-alt-repo/magiskboot_x86_64/raw/main/magiskboot
+    chmod +x magiskboot
+    
+    ./magiskboot unpack stock_boot.img
+    mv Image kernel
+    ./magiskboot repack stock_boot.img rooted_boot.img
+    log "تم إنشاء الملف النهائي: rooted_boot.img"
+fi
+
+log "انتهت العملية. الملفات موجودة في مجلد: $BUILD_DIR"
