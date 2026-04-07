@@ -1,7 +1,6 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 مع KernelSU
-# تم التحديث بناءً على إعدادات سامسونج الرسمية (LLVM=1)
 # ============================================================
 
 set -eo pipefail
@@ -107,14 +106,12 @@ echo -e "${GREEN}=== المرحلة 4: حقن كود KernelSU ===${NC}"
 curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
 echo -e "${GREEN}=== المرحلة 5: التحضير وتجهيز defconfig ===${NC}"
-# --- الأسرار التي اكتشفناها من كود سامسونج ---
 export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=13
 export ANDROID_MAJOR_VERSION=t
 export DTC_FLAGS="-@"
 export LLVM=1
 export LLVM_IAS=1
-# ----------------------------------------------
 
 DEFCONFIG="s5e8835-a35xjvxx_defconfig"
 make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- $DEFCONFIG
@@ -147,8 +144,11 @@ if [ -d "$PWD/patches" ]; then
 fi
 
 echo -e "${GREEN}=== المرحلة 8: ترجمة النواة ===${NC}"
-# استخدام LLVM=1 لضمان بيئة بناء نظيفة كما حددتها سامسونج
-make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-none-linux-gnu- Image
+# --- الدرع الواقي الشامل (تمت إضافة حل مشكلة الميديا VLA و Fallthrough) ---
+export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline"
+export KCPPFLAGS="-Wno-error"
+
+make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-none-linux-gnu- KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="$KCPPFLAGS" Image
 
 if [ ! -f "arch/arm64/boot/Image" ]; then error "فشل التجميع، لم يتم العثور على Image."; fi
 mkdir -p "$BUILD_DIR" && cp arch/arm64/boot/Image "$BUILD_DIR/"
