@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380)
-# باستخدام clang-18 و lld-18 من Ubuntu 24.04
+# مع KernelSU + تفعيل KPROBES + Clang-18
 # ============================================================
 
 export ARCH=arm64
@@ -12,7 +12,6 @@ export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=14
 export ANDROID_MAJOR_VERSION=u
 
-# استخدام clang-18 و lld-18 المثبتين في النظام
 export CC=clang-18
 export LD=ld.lld-18
 export CROSS_COMPILE=aarch64-linux-gnu-
@@ -105,6 +104,7 @@ build_kernel() {
     if [ -n "$GITHUB_ACTIONS" ] || [ -n "$CI" ]; then
         echo "[INFO] بيئة CI، تخطي menuconfig."
     else
+        echo "[INFO] فتح menuconfig للتعديل اليدوي..."
         make "${BUILD_OPTIONS[@]}" menuconfig
     fi
 
@@ -131,7 +131,7 @@ build_kernel() {
     fi
 
     if [ -f "stock_boot/boot.img" ]; then
-        echo "[INFO] بناء boot.img..."
+        echo "[INFO] بناء boot.img باستخدام magiskboot..."
         mkdir -p boot_work
         cp stock_boot/boot.img boot_work/
         cd boot_work
@@ -140,9 +140,9 @@ build_kernel() {
         magiskboot repack boot.img
         mv new-boot.img ../build/boot.img
         cd ..
-        echo "[SUCCESS] boot.img created"
+        echo "[SUCCESS] تم إنشاء boot.img"
     else
-        echo "[WARN] لا يوجد boot.img، فقط Image."
+        echo "[WARN] لا يوجد stock_boot/boot.img، تم بناء Image فقط."
     fi
 
     echo -e "\n[SUCCESS] تم التجميع!"
