@@ -1,77 +1,24 @@
-name: Build Kernel (Exynos) - Auto Source + boot.img + AnyKernel3
+name: Build Kernel (Exynos) - Auto
 
 on:
   workflow_dispatch:
     inputs:
       kernel_source_url:
-        description: 'رابط سورس النواة (ZIP, TAR.GZ, TAR.XZ, أو repo .git أو رابط Google Drive) - اتركه فارغاً لاستخدام السورس الموجود في مجلد kernel/ بالمستودع'
-        required: false
-        default: ''
-        type: string
+        description: 'رابط سورس النواة (ZIP, TAR.GZ, TAR.XZ, .git أو Google Drive)'
+        required: true
       boot_direct_url:
-        description: 'رابط مباشر لـ boot.img (يدعم Google Drive والروابط العادية) - اتركه فارغاً لاستخدام الملف من boot-stock/boot.img'
+        description: 'رابط boot.img (مباشر أو Google Drive) - اختياري'
         required: false
         default: ''
-        type: string
 
 jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Read default kernel source URL from file
-        id: read_kernel_url
-        run: |
-          if [ -f "kernel_source_url.txt" ]; then
-            DEFAULT_URL=$(cat kernel_source_url.txt | head -1)
-            echo "default_url=$DEFAULT_URL" >> $GITHUB_OUTPUT
-          else
-            echo "default_url=" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Read default boot URL from file
-        id: read_boot_url
-        run: |
-          if [ -f "boot_url.txt" ]; then
-            DEFAULT_BOOT=$(cat boot_url.txt | head -1)
-            echo "default_boot_url=$DEFAULT_BOOT" >> $GITHUB_OUTPUT
-          else
-            echo "default_boot_url=" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Set effective kernel source URL
-        id: set_kernel_url
-        run: |
-          INPUT_URL="${{ github.event.inputs.kernel_source_url }}"
-          if [ -n "$INPUT_URL" ]; then
-            echo "effective_url=$INPUT_URL" >> $GITHUB_OUTPUT
-          else
-            DEFAULT_URL="${{ steps.read_kernel_url.outputs.default_url }}"
-            if [ -n "$DEFAULT_URL" ]; then
-              echo "effective_url=$DEFAULT_URL" >> $GITHUB_OUTPUT
-            else
-              echo "effective_url=" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-      - name: Set effective boot URL
-        id: set_boot_url
-        run: |
-          INPUT_BOOT="${{ github.event.inputs.boot_direct_url }}"
-          if [ -n "$INPUT_BOOT" ]; then
-            echo "effective_boot_url=$INPUT_BOOT" >> $GITHUB_OUTPUT
-          else
-            DEFAULT_BOOT="${{ steps.read_boot_url.outputs.default_boot_url }}"
-            if [ -n "$DEFAULT_BOOT" ]; then
-              echo "effective_boot_url=$DEFAULT_BOOT" >> $GITHUB_OUTPUT
-            else
-              echo "effective_boot_url=" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-      - name: Setup Build Environment
+      - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y bc bison build-essential ccache curl device-tree-compiler \
@@ -79,122 +26,54 @@ jobs:
             libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev \
             libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
             zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
-            unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev \
-            cpio tofrodos python3-markdown libgl1-mesa-dev libx11-dev libreadline-dev
-          wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
-          sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
+            unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev cpio tofrodos python3-markdown
           pip install gdown
 
-      - name: Download and Extract Kernel Source
-        id: download_source
-        if: steps.set_kernel_url.outputs.effective_url != ''
+      - name: Download kernel source
         run: |
-          SOURCE_URL="${{ steps.set_kernel_url.outputs.effective_url }}"
-          echo "Downloading from: $SOURCE_URL"
+          URL="${{ github.event.inputs.kernel_source_url }}"
           mkdir -p kernel-source
-          if [[ "$SOURCE_URL" == *drive.google.com* ]] || [[ "$SOURCE_URL" == *docs.google.com* ]]; then
-            FILE_ID=$(echo "$SOURCE_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
-            [ -z "$FILE_ID" ] && FILE_ID=$(echo "$SOURCE_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
-            gdown "https://drive.google.com/uc?id=${FILE_ID}" -O kernel-source.download
-          elif [[ "$SOURCE_URL" == *.git ]]; then
-            git clone --depth=1 "$SOURCE_URL" kernel-source
+          if [[ "$URL" == *drive.google.com* ]]; then
+            ID=$(echo "$URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+')
+            gdown "https://drive.google.com/uc?id=${ID}" -O kernel.zip
+            unzip -q kernel.zip -d kernel-source
+          elif [[ "$URL" == *.git ]]; then
+            git clone --depth=1 "$URL" kernel-source
           else
-            curl -L -A "Mozilla/5.0" -o kernel-source.download "$SOURCE_URL"
+            curl -L -o kernel.zip "$URL"
+            unzip -q kernel.zip -d kernel-source
           fi
-          if [ -f kernel-source.download ]; then
-            case $(file -b --mime-type kernel-source.download) in
-              application/zip) unzip -q kernel-source.download -d kernel-source ;;
-              application/gzip|application/x-gzip) mv kernel-source.download kernel-source.tar.gz && tar -xzf kernel-source.tar.gz -C kernel-source --strip-components=1 ;;
-              application/x-xz) mv kernel-source.download kernel-source.tar.xz && tar -xJf kernel-source.tar.xz -C kernel-source --strip-components=1 ;;
-              application/x-tar) mv kernel-source.download kernel-source.tar && tar -xf kernel-source.tar -C kernel-source --strip-components=1 ;;
-              text/html) echo "ERROR: HTML page"; exit 1 ;;
-            esac
-          fi
+          # معالجة Kernel.tar.gz من سامسونج
           if [ -f kernel-source/Kernel.tar.gz ]; then
-            echo "Detected Kernel.tar.gz from Samsung source, extracting..."
             cd kernel-source && tar -xvf Kernel.tar.gz && rm Kernel.tar.gz && cd ..
           fi
-          echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
 
-      - name: Use kernel source from repo folder 'kernel/'
-        if: steps.set_kernel_url.outputs.effective_url == ''
+      - name: Download boot.img (optional)
+        if: github.event.inputs.boot_direct_url != ''
         run: |
-          if [ -d "kernel" ]; then
-            mkdir -p kernel-source
-            rsync -av ./kernel/ kernel-source/
-            echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
-          else
-            echo "ERROR: No kernel source provided."
-            exit 1
-          fi
-
-      - name: Download boot.img from URL
-        id: download_boot
-        if: steps.set_boot_url.outputs.effective_boot_url != ''
-        run: |
-          BOOT_URL="${{ steps.set_boot_url.outputs.effective_boot_url }}"
+          BOOT_URL="${{ github.event.inputs.boot_direct_url }}"
           mkdir -p kernel-source/stock_boot
-          if [[ "$BOOT_URL" == *google.com* ]]; then
-            FILE_ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
-            [ -z "$FILE_ID" ] && FILE_ID=$(echo "$BOOT_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
-            gdown "https://drive.google.com/uc?id=${FILE_ID}" -O kernel-source/stock_boot/boot.img
+          if [[ "$BOOT_URL" == *drive.google.com* ]]; then
+            ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+')
+            gdown "https://drive.google.com/uc?id=${ID}" -O kernel-source/stock_boot/boot.img
           else
             curl -L -o kernel-source/stock_boot/boot.img "$BOOT_URL"
-          fi
-          if file kernel-source/stock_boot/boot.img | grep -q "HTML"; then
-            rm kernel-source/stock_boot/boot.img
-            exit 1
-          fi
-          echo "success=true" >> $GITHUB_OUTPUT
-
-      - name: Use boot.img from repository (fallback)
-        if: |
-          steps.set_boot_url.outputs.effective_boot_url == '' ||
-          (steps.set_boot_url.outputs.effective_boot_url != '' && steps.download_boot.outputs.success != 'true')
-        run: |
-          if [ -f "boot-stock/boot.img" ]; then
-            mkdir -p kernel-source/stock_boot
-            cp boot-stock/boot.img kernel-source/stock_boot/
           fi
 
       - name: Copy build script and patches
         run: |
           cp build_a35.sh kernel-source/
-          cp custom.config kernel-source/ 2>/dev/null || true
-          cp -r patches kernel-source/ 2>/dev/null || true
+          [ -f custom.config ] && cp custom.config kernel-source/
+          [ -d patches ] && cp -r patches kernel-source/
           chmod +x kernel-source/build_a35.sh
 
-      - name: Build Kernel
+      - name: Build kernel
         run: |
           cd kernel-source
           ./build_a35.sh
 
-      - name: Upload Kernel Image
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-image
-          path: kernel-source/build/Image
-
-      - name: Upload Boot Image (if exists)
-        uses: actions/upload-artifact@v4
-        with:
-          name: boot-image
-          path: kernel-source/build/boot.img
-
-      - name: Create Odin tar (if boot.img exists)
-        if: hashFiles('kernel-source/build/boot.img') != ''
-        run: |
-          cd kernel-source/build
-          tar -cvf Custom-Kernel.tar boot.img
-      - name: Upload Odin tar
-        if: hashFiles('kernel-source/build/Custom-Kernel.tar') != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: odin-tar
-          path: kernel-source/build/Custom-Kernel.tar
-
-      - name: Upload AnyKernel3 zip
-        uses: actions/upload-artifact@v4
-        with:
-          name: anykernel3-zip
-          path: kernel-source/build/AnyKernel3-*.zip
+          name: kernel-output
+          path: kernel-source/build/
