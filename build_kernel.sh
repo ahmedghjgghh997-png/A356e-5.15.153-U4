@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 مع KernelSU
-# (مع دعم custom.config وجميع إعدادات تعطيل الحماية)
+# (متوافق مع GitHub Actions - Ubuntu 24.04)
 # ============================================================
 
 set -e
@@ -19,14 +19,20 @@ export ARCH=arm64
 export KERNEL_ROOT="$(pwd)/kernel-source"
 export BUILD_DIR="$KERNEL_ROOT/build"
 
-# ========== 0. الروابط ==========
+# ========== 0. الروابط (من متغيرات البيئة) ==========
 KERNEL_URL="${INPUT_KERNEL_URL}"
 BOOT_URL="${INPUT_BOOT_URL}"
 AK3_CHOICE="${AK3_CHOICE_ENV:-n}"
 
 [ -z "$KERNEL_URL" ] && error "رابط سورس النواة فارغ!"
+if [ -z "$BOOT_URL" ]; then
+    warn "رابط boot.img غير متوفر. لن يتم إنشاء boot.img."
+fi
 
-# ========== 1. تثبيت التبعيات ==========
+log "رابط النواة: $KERNEL_URL"
+[ -n "$BOOT_URL" ] && log "رابط boot.img: $BOOT_URL"
+
+# ========== 1. تثبيت التبعيات الأساسية ==========
 if [ ! -f "$HOME/.kernel_deps_installed" ]; then
     sudo apt-get update -y
     sudo apt-get install -y bc bison build-essential ccache curl device-tree-compiler \
@@ -39,7 +45,7 @@ if [ ! -f "$HOME/.kernel_deps_installed" ]; then
     touch "$HOME/.kernel_deps_installed"
 fi
 
-# ========== 2. إنشاء رابط رمزي لـ ld.lld (احتياطي) ==========
+# ========== 2. إنشاء رابط رمزي لـ ld.lld (لتجنب خطأ not found) ==========
 if ! command -v ld.lld &> /dev/null; then
     sudo ln -sf $(which ld.lld-18) /usr/local/bin/ld.lld
     export PATH=/usr/local/bin:$PATH
@@ -73,10 +79,10 @@ fi
 [ -f "Kernel.tar.gz" ] && tar -xzf Kernel.tar.gz && rm Kernel.tar.gz
 [ ! -f "Makefile" ] && error "Makefile غير موجود. تأكد من صحة سورس النواة."
 
-echo -e "${GREEN}=== المرحلة 4: حقن كود KernelSU ===${NC}"
+# ========== 4. KernelSU ==========
 curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
-echo -e "${GREEN}=== المرحلة 5: التحضير وتجهيز defconfig ===${NC}"
+# ========== 5. متغيرات سامسونج وإعدادات الترجمة ==========
 export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=13
 export ANDROID_MAJOR_VERSION=t
@@ -84,22 +90,29 @@ export DTC_FLAGS="-@"
 export LLVM=1
 export LLVM_IAS=1
 
+# استخدام clang-18 من النظام (بدلاً من تحميل toolchains يدويًا)
+export CC=clang-18
+export LD=ld.lld-18
+export CROSS_COMPILE=aarch64-linux-gnu-
+export CLANG_TRIPLE=aarch64-linux-gnu-
+
+# ========== 6. defconfig ==========
 DEFCONFIG="s5e8835-a35xjvxx_defconfig"
-make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- $DEFCONFIG
+make ARCH=arm64 CC=$CC LD=$LD CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE LLVM=1 LLVM_IAS=1 $DEFCONFIG
 
 if [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
     cp "arch/arm64/configs/$DEFCONFIG" "arch/arm64/configs/stock_defconfig"
 fi
 
-# ========== إضافة: دمج custom.config (إذا كان موجودًا) ==========
+# ========== 7. دمج custom.config (إذا كان موجودًا) ==========
 if [ -f "../custom.config" ]; then
-    echo -e "${GREEN}=== دمج custom.config (التعديلات الدائمة) ===${NC}"
+    log "دمج custom.config"
     cp ../custom.config .
     scripts/kconfig/merge_config.sh -m -O . .config custom.config
-    make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- olddefconfig
+    make ARCH=arm64 CC=$CC LD=$LD CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE LLVM=1 LLVM_IAS=1 olddefconfig
 fi
 
-echo -e "${GREEN}=== المرحلة 6: تعطيل حماية سامسونج وتفعيل KSU ===${NC}"
+# ========== 8. تعطيل حماية سامسونج وتفعيل KSU ==========
 if [ -f "scripts/config" ]; then
     scripts/config --file ".config" -d CONFIG_UH -d CONFIG_UH_RKP -d CONFIG_RKP_CFP \
         -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE -d CONFIG_SECURITY_DSMS \
@@ -124,22 +137,21 @@ else
     echo -e "CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y\nCONFIG_KSU=y\nCONFIG_KERNEL_GZIP=y\nCONFIG_DEBUG_INFO_BTF=n\nCONFIG_DEBUG_INFO=n" >> .config
 fi
 
-log "جاري حفظ إعدادات النواة (olddefconfig)..."
-make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- olddefconfig
+make ARCH=arm64 CC=$CC LD=$LD CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE LLVM=1 LLVM_IAS=1 olddefconfig
 
+# ========== 9. تطبيق الباتشات (إذا وجدت) ==========
 if [ -d "$PWD/patches" ]; then
-    echo -e "${GREEN}=== المرحلة 7: تطبيق الباتشات الإضافية ===${NC}"
+    log "تطبيق الباتشات من مجلد patches/"
     for patch in patches/*.patch; do
-        [ -f "$patch" ] && git apply "$patch" || true
+        [ -f "$patch" ] && git apply "$patch" 2>/dev/null || true
     done
 fi
 
-echo -e "${GREEN}=== المرحلة 8: ترجمة النواة ===${NC}"
-# --- الدرع الواقي الشامل (تمت إضافة حل مشكلة الميديا VLA و Fallthrough) ---
+# ========== 10. ترجمة النواة ==========
 export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline"
 export KCPPFLAGS="-Wno-error"
 
-make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-none-linux-gnu- KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="$KCPPFLAGS" Image
+make -j$(nproc) ARCH=arm64 CC=$CC LD=$LD CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE LLVM=1 LLVM_IAS=1 KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="$KCPPFLAGS" Image
 
 # البحث عن Image أو Image.gz
 if [ -f "arch/arm64/boot/Image.gz" ]; then
@@ -154,43 +166,48 @@ else
     error "فشل التجميع، لم يتم العثور على Image أو Image.gz."
 fi
 
-echo -e "${GREEN}=== المرحلة 9: تحضير boot.img ===${NC}"
-mkdir -p "$KERNEL_ROOT/stock_boot"
-if [[ "$BOOT_URL" == *drive.google.com* ]]; then
-    download_google_drive "$BOOT_URL" "$KERNEL_ROOT/stock_boot/boot.img"
-else
-    curl -L -o "$KERNEL_ROOT/stock_boot/boot.img" "$BOOT_URL"
+# ========== 11. تحضير boot.img (إذا تم توفير رابط) ==========
+if [ -n "$BOOT_URL" ]; then
+    log "تحضير boot.img..."
+    mkdir -p stock_boot
+    if [[ "$BOOT_URL" == *drive.google.com* ]]; then
+        download_google_drive "$BOOT_URL" stock_boot/boot.img
+    else
+        curl -L -o stock_boot/boot.img "$BOOT_URL"
+    fi
+    [ -f "stock_boot/boot.img" ] || error "فشل تحميل boot.img"
+
+    # تثبيت magiskboot
+    if ! command -v magiskboot &> /dev/null; then
+        mkdir -p "$HOME/tools/magisk" && cd "$HOME/tools/magisk"
+        wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+        unzip -q -j Magisk-v27.0.apk 'lib/x86_64/libmagiskboot.so' -d .
+        mv libmagiskboot.so magiskboot && chmod +x magiskboot
+        export PATH="$HOME/tools/magisk:$PATH"
+        cd "$KERNEL_ROOT"
+    fi
+
+    mkdir -p boot_work && cp stock_boot/boot.img boot_work/
+    cd boot_work
+    magiskboot unpack boot.img
+    cp "$IMAGE_FILE" kernel
+    magiskboot repack boot.img
+    mv new-boot.img "$BUILD_DIR/boot.img"
+    cd ..
+    log "تم إنشاء boot.img"
 fi
 
-mkdir -p "$HOME/tools/magisk" && cd "$HOME/tools/magisk"
-wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
-unzip -q -j Magisk-v27.0.apk 'lib/x86_64/libmagiskboot.so' -d .
-mv libmagiskboot.so magiskboot && chmod +x magiskboot
-export PATH="$HOME/tools/magisk:$PATH"
-
-cd "$KERNEL_ROOT"
-mkdir -p boot_work && cp "$KERNEL_ROOT/stock_boot/boot.img" boot_work/
-cd boot_work
-magiskboot unpack boot.img
-
-rm -f kernel kernel.lz4 kernel.gz kernel.bz2
-
-cp "$IMAGE_FILE" kernel
-magiskboot repack boot.img
-mv new-boot.img "$BUILD_DIR/boot.img"
-
-echo -e "${GREEN}=== المرحلة 10: إنشاء AnyKernel3.zip ===${NC}"
+# ========== 12. AnyKernel3.zip (اختياري) ==========
 if [[ "$AK3_CHOICE" == "y" || "$AK3_CHOICE" == "Y" ]]; then
+    log "إنشاء AnyKernel3.zip..."
     cd "$KERNEL_ROOT"
-    if [ ! -d "AnyKernel3" ]; then
-        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
-    fi
+    [ ! -d "AnyKernel3" ] && git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
     cp "$IMAGE_FILE" AnyKernel3/Image
     cd AnyKernel3
     zip -r9 "../build/AnyKernel3-$(date +%Y%m%d-%H%M%S).zip" . -x ".git*" "README.md" "*.zip"
     cd ..
-    log "تم إنشاء AnyKernel3.zip في مجلد build/"
+    log "تم إنشاء AnyKernel3.zip"
 fi
 
-echo -e "${GREEN}=== انتهى بنجاح! تم إنشاء boot.img المدمج بـ KernelSU ===${NC}"
+echo -e "${GREEN}=== نجح البناء! المخرجات في: $BUILD_DIR ===${NC}"
 ls -la "$BUILD_DIR"
