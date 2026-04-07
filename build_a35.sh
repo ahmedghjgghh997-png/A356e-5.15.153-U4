@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380)
-# مع KernelSU + تفعيل KPROBES تلقائياً + تعطيل حماية Samsung
+# مع KernelSU + تفعيل KPROBES + Clang 18
 # ============================================================
 
 export ARCH=arm64
@@ -12,32 +12,22 @@ export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=14
 export ANDROID_MAJOR_VERSION=u
 
-# ---- إعداد Neutron-Clang ----
-if [ ! -d "${HOME}/toolchains/neutron-clang" ]; then
-    echo "[INFO] تجهيز Neutron-Clang (أول مرة)..."
-    mkdir -p "${HOME}/toolchains/neutron-clang"
-    cd "${HOME}/toolchains/neutron-clang"
-    curl -LO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
-    chmod +x antman
-    ./antman -S
-    cd "${KERNEL_ROOT}"
-fi
-
-export PATH="${HOME}/toolchains/neutron-clang/bin:${PATH}"
-export BUILD_CC="${HOME}/toolchains/neutron-clang/bin/clang"
+# استخدام Clang 18 المثبت في النظام (بدلاً من Neutron-Clang)
+export CC=clang-18
+export CROSS_COMPILE=aarch64-linux-gnu-
+export CLANG_TRIPLE=aarch64-linux-gnu-
 
 export BUILD_OPTIONS=(
     -C "${KERNEL_ROOT}"
     -j$(nproc)
     ARCH=arm64
-    CC=${BUILD_CC}
-    CROSS_COMPILE=aarch64-linux-gnu-
-    CLANG_TRIPLE=aarch64-linux-gnu-
+    CC=${CC}
+    CROSS_COMPILE=${CROSS_COMPILE}
+    CLANG_TRIPLE=${CLANG_TRIPLE}
     LLVM=1
     LLVM_IAS=1
 )
 
-# ---- إزالة الـ GCC wrapper (خاص بـ Exynos) ----
 remove_gcc_wrapper() {
     if grep -q "REAL_CC" Makefile; then
         sed -i '/REAL_CC/d' Makefile
@@ -50,7 +40,6 @@ remove_gcc_wrapper() {
     fi
 }
 
-# ---- تطبيق الباتشات الإضافية من مجلد patches/ ----
 apply_additional_patches() {
     if [ -d "patches" ]; then
         echo "[INFO] تطبيق الباتشات من مجلد patches/"
@@ -68,7 +57,6 @@ prepare_stock_defconfig() {
     fi
 }
 
-# ---- تفعيل خيارات KPROBES (لـ KernelSU) ----
 enable_kprobes() {
     echo "[INFO] تفعيل خيارات KPROBES لدعم KernelSU..."
     scripts/config --file ".config" \
@@ -87,22 +75,19 @@ disable_samsung_security() {
         -d CONFIG_PROCA \
         -d CONFIG_FIVE
 
-    echo "[INFO] تعطيل فحص CRC (لضمان الـ Wi-Fi واللمس والوحدات)..."
+    echo "[INFO] تعطيل فحص CRC..."
     scripts/config --file ".config" --disable CONFIG_MODULE_SIG_FORCE
 }
 
 add_kernelsu() {
     if [ ! -d "KernelSU" ]; then
-        echo "[INFO] جارٍ إضافة KernelSU إلى النواة..."
+        echo "[INFO] إضافة KernelSU..."
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-    else
-        echo "[INFO] KernelSU موجود مسبقاً، يتم تخطي التحميل..."
     fi
 }
 
 merge_custom_config() {
     if [ -f "custom.config" ]; then
-        echo "[INFO] دمج custom.config مع الإعدادات الأساسية..."
         scripts/kconfig/merge_config.sh -m -O . .config custom.config
     fi
 }
@@ -115,28 +100,24 @@ build_kernel() {
     merge_custom_config
     remove_gcc_wrapper
     apply_additional_patches
-
-    # ---- تفعيل KPROBES ----
     enable_kprobes
 
-    # ---- تخطي menuconfig في بيئة CI (GitHub Actions) ----
     if [ -n "$GITHUB_ACTIONS" ] || [ -n "$CI" ]; then
-        echo "[INFO] بيئة CI مكتشفة، يتم تخطي menuconfig."
+        echo "[INFO] بيئة CI، تخطي menuconfig."
     else
-        echo "[INFO] فتح Menuconfig للتعديل اليدوي (اختياري)..."
+        echo "[INFO] فتح menuconfig..."
         make "${BUILD_OPTIONS[@]}" menuconfig
     fi
 
     disable_samsung_security
     add_kernelsu
 
-    echo "[INFO] بدء تجميع النواة (قد يستغرق وقتاً)..."
-    make "${BUILD_OPTIONS[@]}" Image || { echo "[ERROR] فشل تجميع النواة"; exit 1; }
+    echo "[INFO] بدء التجميع..."
+    make "${BUILD_OPTIONS[@]}" Image || { echo "[ERROR] فشل التجميع"; exit 1; }
 
     mkdir -p build
     cp arch/arm64/boot/Image build/
 
-    # ---- تثبيت magiskboot إذا لم يكن موجوداً ----
     if ! command -v magiskboot &> /dev/null; then
         echo "[INFO] تثبيت magiskboot..."
         mkdir -p tools/magisk
@@ -150,9 +131,8 @@ build_kernel() {
         cd ../..
     fi
 
-    # ---- بناء boot.img النهائي ----
     if [ -f "stock_boot/boot.img" ]; then
-        echo "[INFO] بناء boot.img باستخدام magiskboot..."
+        echo "[INFO] بناء boot.img..."
         mkdir -p boot_work
         cp stock_boot/boot.img boot_work/
         cd boot_work
@@ -161,12 +141,12 @@ build_kernel() {
         magiskboot repack boot.img
         mv new-boot.img ../build/boot.img
         cd ..
-        echo "[SUCCESS] تم إنشاء build/boot.img"
+        echo "[SUCCESS] boot.img created"
     else
-        echo "[WARN] لا يوجد stock_boot/boot.img، تم بناء Image فقط."
+        echo "[WARN] لا يوجد boot.img، فقط Image."
     fi
 
-    echo -e "\n[SUCCESS] تم التجميع بنجاح!"
+    echo -e "\n[SUCCESS] تم التجميع!"
     echo "Image: build/Image"
     [ -f "build/boot.img" ] && echo "boot.img: build/boot.img"
 }
