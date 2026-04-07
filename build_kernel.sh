@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 مع KernelSU
-# يدعم custom.config وجميع إعدادات تعطيل الحماية
+# (مع دعم custom.config وجميع إعدادات تعطيل الحماية)
 # ============================================================
 
 set -e
@@ -19,7 +19,7 @@ export ARCH=arm64
 export KERNEL_ROOT="$(pwd)/kernel-source"
 export BUILD_DIR="$KERNEL_ROOT/build"
 
-# ========== الروابط ==========
+# ========== 0. الروابط ==========
 KERNEL_URL="${INPUT_KERNEL_URL}"
 BOOT_URL="${INPUT_BOOT_URL}"
 AK3_CHOICE="${AK3_CHOICE_ENV:-n}"
@@ -71,12 +71,12 @@ if [ -f source.download ]; then
     fi
 fi
 [ -f "Kernel.tar.gz" ] && tar -xzf Kernel.tar.gz && rm Kernel.tar.gz
-[ ! -f "Makefile" ] && error "Makefile غير موجود. السورس تالف."
+[ ! -f "Makefile" ] && error "Makefile غير موجود. تأكد من صحة سورس النواة."
 
-# ========== 4. KernelSU ==========
+echo -e "${GREEN}=== المرحلة 4: حقن كود KernelSU ===${NC}"
 curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
-# ========== 5. متغيرات سامسونج ==========
+echo -e "${GREEN}=== المرحلة 5: التحضير وتجهيز defconfig ===${NC}"
 export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=13
 export ANDROID_MAJOR_VERSION=t
@@ -84,52 +84,64 @@ export DTC_FLAGS="-@"
 export LLVM=1
 export LLVM_IAS=1
 
-# ========== 6. defconfig ==========
 DEFCONFIG="s5e8835-a35xjvxx_defconfig"
-make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- $DEFCONFIG
+make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- $DEFCONFIG
 
-# ========== 7. دمج custom.config (إذا وجد) ==========
-if [ -f "../custom.config" ]; then
-    log "دمج custom.config"
-    cp ../custom.config .
-    scripts/kconfig/merge_config.sh -m -O . .config custom.config
+if [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
+    cp "arch/arm64/configs/$DEFCONFIG" "arch/arm64/configs/stock_defconfig"
 fi
 
-# ========== 8. تعطيل حماية سامسونج بالكامل ==========
+# ========== إضافة: دمج custom.config ==========
+if [ -f "../custom.config" ]; then
+    echo -e "${GREEN}=== دمج custom.config (التعديلات الدائمة) ===${NC}"
+    cp ../custom.config .
+    scripts/kconfig/merge_config.sh -m -O . .config custom.config
+    make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- olddefconfig
+fi
+
+echo -e "${GREEN}=== المرحلة 6: تعطيل حماية سامسونج وتفعيل KSU ===${NC}"
 if [ -f "scripts/config" ]; then
     scripts/config --file ".config" -d CONFIG_UH -d CONFIG_UH_RKP -d CONFIG_RKP_CFP \
-        -d CONFIG_RKP_CFP_JOPP -d CONFIG_UH_LKMAUTH -d CONFIG_UH_LKM_BLOCK \
-        -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE -d CONFIG_TIMA \
-        -d CONFIG_TIMA_LKMAUTH -d CONFIG_KNOX_KAP -d CONFIG_SEC_RESTRICT_ROOTING \
-        -d CONFIG_SEC_RESTRICT_SETUID -d CONFIG_SEC_RESTRICT_FORK -d CONFIG_INTEGRITY \
-        -d CONFIG_DM_VERITY -d CONFIG_MODULE_SIG -d CONFIG_MODULE_SIG_FORCE -d CONFIG_MODULE_SIG_ALL
-    scripts/config --file ".config" -e CONFIG_KPROBES -e CONFIG_HAVE_KPROBES -e CONFIG_KPROBE_EVENTS
+        -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE -d CONFIG_SECURITY_DSMS \
+        -d CONFIG_KNOX_KAP -d CONFIG_SAMSUNG_FREECESS -d CONFIG_MODULE_SIG_FORCE \
+        -d CONFIG_LTO_CLANG_THIN -d CONFIG_LTO_CLANG_FULL -e CONFIG_LTO_NONE
+    
+    # إضافات متقدمة لتعطيل الحماية بالكامل
+    scripts/config --file ".config" -d CONFIG_RKP_CFP_JOPP -d CONFIG_UH_LKMAUTH -d CONFIG_UH_LKM_BLOCK
+    scripts/config --file ".config" -d CONFIG_TIMA -d CONFIG_TIMA_LKMAUTH -d CONFIG_KNOX_KAP
+    scripts/config --file ".config" -d CONFIG_SEC_RESTRICT_ROOTING -d CONFIG_SEC_RESTRICT_SETUID -d CONFIG_SEC_RESTRICT_FORK
+    scripts/config --file ".config" -d CONFIG_INTEGRITY -d CONFIG_DM_VERITY
+    scripts/config --file ".config" -d CONFIG_MODULE_SIG -d CONFIG_MODULE_SIG_FORCE -d CONFIG_MODULE_SIG_ALL
+    
+    scripts/config --file ".config" -e CONFIG_KPROBES -e CONFIG_HAVE_KPROBES -e CONFIG_KPROBE_EVENTS -e CONFIG_KSU
     scripts/config --file ".config" -e CONFIG_SECURITY_SELINUX_DEVELOP
     scripts/config --file ".config" -e CONFIG_SECURITY_SELINUX_ALWAYS_PERMISSIVE
     scripts/config --file ".config" -d CONFIG_SECURITY_SELINUX_ALWAYS_ENFORCE
     scripts/config --file ".config" --disable CONFIG_DEBUG_INFO_BTF --disable CONFIG_DEBUG_INFO
     scripts/config --file ".config" -e CONFIG_KERNEL_GZIP
 else
-    # بديل يدوي
     sed -i 's/CONFIG_SECURITY_DEFEX=y/# CONFIG_SECURITY_DEFEX is not set/g' .config
     echo -e "CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y\nCONFIG_KSU=y\nCONFIG_KERNEL_GZIP=y\nCONFIG_DEBUG_INFO_BTF=n\nCONFIG_DEBUG_INFO=n" >> .config
 fi
 
-make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+log "جاري حفظ إعدادات النواة (olddefconfig)..."
+make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- olddefconfig
 
-# ========== 9. تطبيق الباتشات (إذا وجدت) ==========
 if [ -d "$PWD/patches" ]; then
+    echo -e "${GREEN}=== المرحلة 7: تطبيق الباتشات الإضافية ===${NC}"
     for patch in patches/*.patch; do
         [ -f "$patch" ] && git apply "$patch" || true
     done
 fi
 
-# ========== 10. بناء Image ==========
+echo -e "${GREEN}=== المرحلة 8: ترجمة النواة ===${NC}"
+# --- الدرع الواقي الشامل (تمت إضافة حل مشكلة الميديا VLA و Fallthrough) ---
 export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline"
 export KCPPFLAGS="-Wno-error"
 
-make -j$(nproc) ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="$KCPPFLAGS" Image
+make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-none-linux-gnu- KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="$KCPPFLAGS" Image
 
+# البحث عن Image أو Image.gz
 if [ -f "arch/arm64/boot/Image.gz" ]; then
     mkdir -p "$BUILD_DIR"
     cp arch/arm64/boot/Image.gz "$BUILD_DIR/Image.gz"
@@ -142,38 +154,43 @@ else
     error "فشل التجميع، لم يتم العثور على Image أو Image.gz."
 fi
 
-# ========== 11. بناء boot.img (إذا توفر رابط) ==========
-if [ -n "$BOOT_URL" ]; then
-    mkdir -p stock_boot
-    if [[ "$BOOT_URL" == *drive.google.com* ]]; then
-        download_google_drive "$BOOT_URL" stock_boot/boot.img
-    else
-        curl -L -o stock_boot/boot.img "$BOOT_URL"
-    fi
-    mkdir -p "$HOME/tools/magisk" && cd "$HOME/tools/magisk"
-    wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
-    unzip -q -j Magisk-v27.0.apk 'lib/x86_64/libmagiskboot.so' -d .
-    mv libmagiskboot.so magiskboot && chmod +x magiskboot
-    export PATH="$HOME/tools/magisk:$PATH"
-    cd "$KERNEL_ROOT"
-    mkdir -p boot_work && cp stock_boot/boot.img boot_work/
-    cd boot_work
-    magiskboot unpack boot.img
-    cp "$IMAGE_FILE" kernel
-    magiskboot repack boot.img
-    mv new-boot.img "$BUILD_DIR/boot.img"
-    cd ..
+echo -e "${GREEN}=== المرحلة 9: تحضير boot.img ===${NC}"
+mkdir -p "$KERNEL_ROOT/stock_boot"
+if [[ "$BOOT_URL" == *drive.google.com* ]]; then
+    download_google_drive "$BOOT_URL" "$KERNEL_ROOT/stock_boot/boot.img"
+else
+    curl -L -o "$KERNEL_ROOT/stock_boot/boot.img" "$BOOT_URL"
 fi
 
-# ========== 12. AnyKernel3.zip ==========
+mkdir -p "$HOME/tools/magisk" && cd "$HOME/tools/magisk"
+wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+unzip -q -j Magisk-v27.0.apk 'lib/x86_64/libmagiskboot.so' -d .
+mv libmagiskboot.so magiskboot && chmod +x magiskboot
+export PATH="$HOME/tools/magisk:$PATH"
+
+cd "$KERNEL_ROOT"
+mkdir -p boot_work && cp "$KERNEL_ROOT/stock_boot/boot.img" boot_work/
+cd boot_work
+magiskboot unpack boot.img
+
+rm -f kernel kernel.lz4 kernel.gz kernel.bz2
+
+cp "$IMAGE_FILE" kernel
+magiskboot repack boot.img
+mv new-boot.img "$BUILD_DIR/boot.img"
+
+echo -e "${GREEN}=== المرحلة 10: إنشاء AnyKernel3.zip ===${NC}"
 if [[ "$AK3_CHOICE" == "y" || "$AK3_CHOICE" == "Y" ]]; then
     cd "$KERNEL_ROOT"
-    [ ! -d "AnyKernel3" ] && git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+    if [ ! -d "AnyKernel3" ]; then
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+    fi
     cp "$IMAGE_FILE" AnyKernel3/Image
     cd AnyKernel3
     zip -r9 "../build/AnyKernel3-$(date +%Y%m%d-%H%M%S).zip" . -x ".git*" "README.md" "*.zip"
     cd ..
+    log "تم إنشاء AnyKernel3.zip في مجلد build/"
 fi
 
-echo -e "${GREEN}=== نجح البناء! المخرجات في: $BUILD_DIR ===${NC}"
+echo -e "${GREEN}=== انتهى بنجاح! تم إنشاء boot.img المدمج بـ KernelSU ===${NC}"
 ls -la "$BUILD_DIR"
