@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380)
-# مع KernelSU + تفعيل KPROBES + Clang-18 + تعطيل الحماية
+# مع KernelSU + KPROBES + Clang-18 + AnyKernel3 + boot.img
 # ============================================================
 
 export ARCH=arm64
@@ -27,7 +27,15 @@ export BUILD_OPTIONS=(
     CLANG_TRIPLE=${CLANG_TRIPLE}
     LLVM=1
     LLVM_IAS=1
-    V=1        # <--- أضف هذا السطر هنا
+    AR=llvm-ar
+    NM=llvm-nm
+    OBJCOPY=llvm-objcopy
+    OBJDUMP=llvm-objdump
+    READELF=llvm-readelf
+    STRIP=llvm-strip
+    HOSTCC=clang-18
+    HOSTCXX=clang++-18
+    V=1
 )
 
 remove_gcc_wrapper() {
@@ -99,6 +107,27 @@ merge_custom_config() {
     fi
 }
 
+# ========== AnyKernel3 functions ==========
+prepare_anykernel3() {
+    if [ ! -d "AnyKernel3" ]; then
+        echo "[INFO] استنساخ AnyKernel3 من osm0sis..."
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+    else
+        echo "[INFO] AnyKernel3 موجود مسبقاً، تحديث..."
+        cd AnyKernel3 && git pull && cd ..
+    fi
+}
+
+create_anykernel3_zip() {
+    echo "[INFO] إنشاء حزمة AnyKernel3.zip..."
+    cp build/Image AnyKernel3/
+    cd AnyKernel3
+    zip -r9 "../build/AnyKernel3-$(date +%Y%m%d-%H%M%S).zip" . -x ".git*" "README.md" "*.zip"
+    cd ..
+    echo "[SUCCESS] تم إنشاء AnyKernel3.zip في مجلد build/"
+}
+# ========================================
+
 build_kernel() {
     echo "[INFO] استخدام defconfig: s5e8835-a35xjvxx_defconfig"
     make "${BUILD_OPTIONS[@]}" s5e8835-a35xjvxx_defconfig
@@ -125,6 +154,7 @@ build_kernel() {
     mkdir -p build
     cp arch/arm64/boot/Image build/
 
+    # تثبيت magiskboot إذا لم يكن موجوداً
     if ! command -v magiskboot &> /dev/null; then
         echo "[INFO] تثبيت magiskboot..."
         mkdir -p tools/magisk
@@ -138,6 +168,7 @@ build_kernel() {
         cd ../..
     fi
 
+    # بناء boot.img إذا وجد stock_boot/boot.img
     if [ -f "stock_boot/boot.img" ]; then
         echo "[INFO] بناء boot.img باستخدام magiskboot..."
         mkdir -p boot_work
@@ -153,9 +184,14 @@ build_kernel() {
         echo "[WARN] لا يوجد stock_boot/boot.img، تم بناء Image فقط."
     fi
 
+    # إنشاء AnyKernel3.zip
+    prepare_anykernel3
+    create_anykernel3_zip
+
     echo -e "\n[SUCCESS] تم التجميع بنجاح!"
     echo "Image: build/Image"
     [ -f "build/boot.img" ] && echo "boot.img: build/boot.img"
+    ls build/AnyKernel3-*.zip && echo "AnyKernel3.zip: build/AnyKernel3-*.zip"
 }
 
 build_kernel
