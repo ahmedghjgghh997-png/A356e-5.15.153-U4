@@ -36,6 +36,7 @@ export BUILD_OPTIONS=(
     HOSTCC=clang-18
     HOSTCXX=clang++-18
     V=1
+    NO_YAML=1
 )
 
 remove_gcc_wrapper() {
