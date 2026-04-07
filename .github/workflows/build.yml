@@ -15,16 +15,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-
+      
       - name: Build kernel
         run: |
           chmod +x build_kernel.sh
-          INPUT_KERNEL_URL="${{ github.event.inputs.kernel_url }}" \
-          INPUT_BOOT_URL="${{ github.event.inputs.boot_url }}" \
+          KERNEL_URL_ENV="${{ github.event.inputs.kernel_url }}" \
+          BOOT_URL_ENV="${{ github.event.inputs.boot_url }}" \
           ./build_kernel.sh
-        env:
-          AK3_CHOICE_ENV: "y"
-
+          
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
