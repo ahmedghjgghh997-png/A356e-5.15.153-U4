@@ -74,7 +74,7 @@ jobs:
             fi
           fi
 
-      # ========== تثبيت البيئة الأساسية مع أحدث الإصدارات ==========
+      # ========== تثبيت البيئة الأساسية (clang-18, lld-18, libyaml-dev) ==========
       - name: Setup Build Environment
         run: |
           sudo apt update
@@ -83,33 +83,8 @@ jobs:
             libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev \
             libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
             zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
-            unzip xz-utils python3-pip libyaml-dev
+            unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev
           pip install gdown
-
-      # ========== تثبيت LLVM/Clang 22.1.0 (أحدث إصدار مستقر) ==========
-      - name: Setup LLVM 22.1.0
-        uses: ZhongRuoyu/setup-llvm@v0
-        with:
-          llvm-version: 22.1.0
-
-      # ========== تثبيت GNU Arm Embedded Toolchain 15.2.rel1 (أحدث إصدار) ==========
-      - name: Setup GNU Arm Embedded Toolchain 15.2.rel1
-        uses: lawkai-vivo/aarch64-none-elf-gcc-action@v1
-        with:
-          version: 15.2.rel1
-          cache: true
-
-      # ========== تثبيت GNU Binutils 2.46 (أحدث إصدار) ==========
-      - name: Install GNU Binutils 2.46
-        run: |
-          wget https://ftp.gnu.org/gnu/binutils/binutils-2.46.tar.xz
-          tar -xf binutils-2.46.tar.xz
-          cd binutils-2.46
-          ./configure --prefix=/usr/local --disable-gdb --disable-gdbserver --disable-sim
-          make -j$(nproc)
-          sudo make install
-          cd ..
-          rm -rf binutils-2.46*
 
       # ========== 1. تحميل سورس النواة (يدعم Samsung Kernel.tar.gz) ==========
       - name: Download and Extract Kernel Source
