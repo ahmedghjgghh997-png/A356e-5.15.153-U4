@@ -140,22 +140,36 @@ jobs:
             exit 1
           fi
 
-      # ========== 2. تحميل boot.img ==========
+      # ========== 2. تحميل boot.img (مع دعم كامل لـ Google Drive) ==========
       - name: Download boot.img from URL
         id: download_boot
         if: steps.set_boot_url.outputs.effective_boot_url != ''
         run: |
           BOOT_URL="${{ steps.set_boot_url.outputs.effective_boot_url }}"
           mkdir -p kernel-source/stock_boot
+          echo "Downloading boot.img from: $BOOT_URL"
+          # استخراج File ID من أي رابط Google Drive
           if [[ "$BOOT_URL" == *drive.google.com* ]] || [[ "$BOOT_URL" == *docs.google.com* ]]; then
             FILE_ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
-            [ -z "$FILE_ID" ] && FILE_ID=$(echo "$BOOT_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
+            if [ -z "$FILE_ID" ]; then
+              FILE_ID=$(echo "$BOOT_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
+            fi
+            if [ -z "$FILE_ID" ]; then
+              echo "ERROR: Could not extract Google Drive file ID"
+              exit 1
+            fi
+            echo "Using gdown with file ID: $FILE_ID"
             gdown "https://drive.google.com/uc?id=${FILE_ID}" -O kernel-source/stock_boot/boot.img
           else
             curl -L -o kernel-source/stock_boot/boot.img "$BOOT_URL"
           fi
+          # التحقق من صحة الملف
+          if [ ! -f "kernel-source/stock_boot/boot.img" ]; then
+            echo "ERROR: Failed to download boot.img"
+            exit 1
+          fi
           if file kernel-source/stock_boot/boot.img | grep -q "HTML"; then
-            echo "ERROR: Downloaded boot.img is HTML page."
+            echo "ERROR: Downloaded boot.img is HTML page. Please use a direct download link or place the file in boot-stock/ folder."
             rm kernel-source/stock_boot/boot.img
             exit 1
           fi
@@ -169,6 +183,9 @@ jobs:
           if [ -f "boot-stock/boot.img" ]; then
             mkdir -p kernel-source/stock_boot
             cp boot-stock/boot.img kernel-source/stock_boot/
+            echo "Using local boot.img from boot-stock/"
+          else
+            echo "WARNING: No boot.img found. Kernel Image will be built only."
           fi
 
       # ========== 3. نسخ السكريبت والملفات المساعدة ==========
