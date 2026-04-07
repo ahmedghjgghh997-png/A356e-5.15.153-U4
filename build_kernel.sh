@@ -5,6 +5,7 @@
 
 set -eo pipefail
 
+# الألوان للطباعة
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -20,6 +21,12 @@ log() { echo -e "${GREEN}[INFO]${NC} $1" | tee -a "$LOG_FILE"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1" | tee -a "$LOG_FILE"; }
 error() { echo -e "${RED}[ERROR] $1${NC}"; exit 1; }
 
+check_command() {
+    if ! command -v "$1" &> /dev/null; then
+        error "$1 غير موجود. قم بتثبيته أولاً."
+    fi
+}
+
 echo -e "${GREEN}=== المرحلة 0: إدخال الروابط ===${NC}"
 KERNEL_URL="${KERNEL_URL_ENV}"
 BOOT_URL="${BOOT_URL_ENV}"
@@ -30,30 +37,54 @@ if [ -z "$BOOT_URL" ]; then error "رابط boot.img فارغ!"; fi
 log "تم استلام رابط النواة: $KERNEL_URL"
 log "تم استلام رابط البوت: $BOOT_URL"
 
-echo -e "${GREEN}=== المرحلة 1: تثبيت التبعيات ===${NC}"
+echo -e "${GREEN}=== المرحلة 1: تثبيت التبعيات الأساسية ===${NC}"
 if [ ! -f "$HOME/.kernel_deps_installed" ]; then
-    sudo apt-get update -y
-    sudo apt-get install -y bc bison build-essential ccache curl device-tree-compiler \
-        flex g++-multilib gcc-multilib git gnupg gperf imagemagick libc6-dev-i386 \
-        libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev \
-        libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
-        zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
-        unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev cpio tofrodos python3-markdown
-    pip install gdown --break-system-packages 2>/dev/null || true
-    touch "$HOME/.kernel_deps_installed"
+    if command -v apt &> /dev/null; then
+        log "نظام Ubuntu/Debian detected. جاري تثبيت التبعيات..."
+        sudo apt-get update -y
+        sudo apt-get install -y bc bison build-essential ccache curl device-tree-compiler \
+            flex g++-multilib gcc-multilib git gnupg gperf imagemagick libc6-dev-i386 \
+            libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev \
+            libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
+            zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
+            unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev cpio tofrodos python3-markdown
+        pip install gdown --break-system-packages 2>/dev/null || true
+        touch "$HOME/.kernel_deps_installed"
+    elif command -v dnf &> /dev/null; then
+        log "نظام Fedora/RHEL detected. جاري تثبيت التبعيات..."
+        sudo dnf group install -y "c-development" "development-tools"
+        sudo dnf install -y git dtc lz4 xz zlib-devel java-17-openjdk-devel python3 \
+            p7zip p7zip-plugins android-tools erofs-utils java-latest-openjdk-devel \
+            ncurses-devel libX11-devel readline-devel mesa-libGL-devel python3-markdown \
+            libxml2 libxslt dos2unix kmod openssl elfutils-libelf-devel dwarves \
+            openssl-devel libarchive zstd rsync clang lld
+        pip3 install gdown --break-system-packages 2>/dev/null || true
+        touch "$HOME/.kernel_deps_installed"
+    else
+        error "نظام غير مدعوم. يرجى تثبيت التبعيات يدويًا حسب الدليل."
+    fi
 fi
 
 echo -e "${GREEN}=== المرحلة 2: تحميل سلاسل الأدوات ===${NC}"
 mkdir -p "$TOOLCHAINS_DIR"
+
 if [ ! -d "$TOOLCHAINS_DIR/clang-r450784e" ]; then
-    log "تحميل Clang..."
-    wget -qO- https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/722c840a8e4d58b5ebdab62ce78eacdafd301208/clang-r450784e.tar.gz | tar -xz -C "$TOOLCHAINS_DIR"
-    mkdir -p "$TOOLCHAINS_DIR/clang-r450784e" && mv "$TOOLCHAINS_DIR/bin" "$TOOLCHAINS_DIR/clang-r450784e/" 2>/dev/null || true
+    log "تحميل clang-r450784e..."
+    cd "$TOOLCHAINS_DIR"
+    wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/722c840a8e4d58b5ebdab62ce78eacdafd301208/clang-r450784e.tar.gz
+    mkdir -p clang-r450784e && tar -xf clang-r450784e.tar.gz -C clang-r450784e
+    rm clang-r450784e.tar.gz
+    cd - >/dev/null
 fi
+
 if [ ! -d "$TOOLCHAINS_DIR/arm-gnu-toolchain-14.2" ]; then
-    log "تحميل GCC..."
-    wget -qO- https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz | tar -xJ -C "$TOOLCHAINS_DIR"
-    mv "$TOOLCHAINS_DIR/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu" "$TOOLCHAINS_DIR/arm-gnu-toolchain-14.2"
+    log "تحميل arm-gnu-toolchain-14.2..."
+    cd "$TOOLCHAINS_DIR"
+    wget -q https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+    tar -xf arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+    mv arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu arm-gnu-toolchain-14.2
+    rm arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+    cd - >/dev/null
 fi
 
 export PATH="$TOOLCHAINS_DIR/clang-r450784e/bin:$TOOLCHAINS_DIR/arm-gnu-toolchain-14.2/bin:$PATH"
@@ -73,7 +104,6 @@ download_google_drive() {
     gdown "https://drive.google.com/uc?id=${FILE_ID}" -O "$OUTPUT"
 }
 
-# (الحل الأول): دعم استخراج zip المعقد بأمان
 extract_source() {
     if ! tar -xzf source_download --strip-components=1 2>/dev/null; then
         log "الملف ليس tar.gz، جاري فك الضغط كـ zip..."
@@ -108,7 +138,21 @@ sed -i '/REAL_CC/d; /CFP_CC/d; /wrapper/d' Makefile 2>/dev/null || true
 DEFCONFIG="s5e8835-a35xjvxx_defconfig"
 make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- $DEFCONFIG
 
-echo -e "${GREEN}=== المرحلة 6: تعطيل حماية سامسونج وتفعيل KSU ===${NC}"
+if [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
+    cp "arch/arm64/configs/$DEFCONFIG" "arch/arm64/configs/stock_defconfig"
+fi
+
+echo -e "${GREEN}=== المرحلة 6: تخصيص النواة (اختياري) ===${NC}"
+# مغلق في GitHub Actions لمنع التجمد، ولكنه موجود في الكود
+if [[ "$MENU_CHOICE_ENV" == "y" || "$MENU_CHOICE_ENV" == "Y" ]]; then
+    if [ ! -t 0 ]; then
+        warn "تخطي menuconfig في بيئة CI."
+    else
+        make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- menuconfig
+    fi
+fi
+
+echo -e "${GREEN}=== المرحلة 7: تعطيل حماية سامسونج وتفعيل KSU ===${NC}"
 if [ -f "scripts/config" ]; then
     scripts/config --file ".config" -d CONFIG_UH -d CONFIG_UH_RKP -d CONFIG_RKP_CFP \
         -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE -d CONFIG_SECURITY_DSMS \
@@ -119,23 +163,23 @@ else
     echo -e "CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y\nCONFIG_KSU=y" >> .config
 fi
 
-# (الحل الثاني): حفظ الإعدادات بصمت حتى يقبلها نظام البناء
 log "جاري حفظ إعدادات النواة (olddefconfig)..."
 make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- olddefconfig
 
 if [ -d "$PWD/patches" ]; then
+    echo -e "${GREEN}=== المرحلة 8: تطبيق الباتشات الإضافية ===${NC}"
     for patch in patches/*.patch; do
         [ -f "$patch" ] && git apply "$patch" || true
     done
 fi
 
-echo -e "${GREEN}=== المرحلة 7: ترجمة النواة ===${NC}"
+echo -e "${GREEN}=== المرحلة 9: ترجمة النواة ===${NC}"
 make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- Image
 
 if [ ! -f "arch/arm64/boot/Image" ]; then error "فشل التجميع، لم يتم العثور على Image."; fi
 mkdir -p "$BUILD_DIR" && cp arch/arm64/boot/Image "$BUILD_DIR/"
 
-echo -e "${GREEN}=== المرحلة 8: تحضير boot.img الخاص بك ===${NC}"
+echo -e "${GREEN}=== المرحلة 10: تحضير boot.img ===${NC}"
 mkdir -p "$KERNEL_ROOT/stock_boot"
 if [[ "$BOOT_URL" == *drive.google.com* ]]; then
     download_google_drive "$BOOT_URL" "$KERNEL_ROOT/stock_boot/boot.img"
@@ -154,11 +198,25 @@ mkdir -p boot_work && cp "$KERNEL_ROOT/stock_boot/boot.img" boot_work/
 cd boot_work
 magiskboot unpack boot.img
 
-# (الحل الثالث): مسح أي كيرنل أصلي (مضغوط أو عادي) لضمان نجاح magiskboot
 rm -f kernel kernel.lz4 kernel.gz kernel.bz2
 
 cp "$BUILD_DIR/Image" kernel
 magiskboot repack boot.img
 mv new-boot.img "$BUILD_DIR/boot.img"
 
+echo -e "${GREEN}=== المرحلة 11: إنشاء AnyKernel3.zip ===${NC}"
+# يتم تشغيلها لو اخترت y أو لو فعلتها في الـ YML
+if [[ "$AK3_CHOICE_ENV" == "y" || "$AK3_CHOICE_ENV" == "Y" ]]; then
+    cd "$KERNEL_ROOT"
+    if [ ! -d "AnyKernel3" ]; then
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+    fi
+    cp "$BUILD_DIR/Image" AnyKernel3/
+    cd AnyKernel3
+    zip -r9 "../build/AnyKernel3-$(date +%Y%m%d-%H%M%S).zip" . -x ".git*" "README.md" "*.zip"
+    cd ..
+    log "تم إنشاء AnyKernel3.zip في مجلد build/"
+fi
+
 echo -e "${GREEN}=== انتهى بنجاح! تم إنشاء boot.img المدمج بـ KernelSU ===${NC}"
+ls -la "$BUILD_DIR"
