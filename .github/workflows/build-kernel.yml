@@ -33,15 +33,28 @@ jobs:
           URL="${{ github.event.inputs.kernel_source_url }}"
           mkdir -p kernel-source
 
-          # دعم Google Drive
           if [[ "$URL" == *drive.google.com* ]]; then
-            ID=$(echo "$URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+')
-            gdown "https://drive.google.com/uc?id=${ID}" -O kernel.zip
-            unzip -q kernel.zip -d kernel-source
-          # دعم .git
+            # استخراج FILE_ID
+            FILE_ID=$(echo "$URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+')
+            if [ -z "$FILE_ID" ]; then
+              FILE_ID=$(echo "$URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
+            fi
+            echo "Downloading from Google Drive with ID: $FILE_ID"
+            # استخدام gdown مع خيار fuzzy
+            gdown --fuzzy "https://drive.google.com/uc?id=${FILE_ID}" -O kernel.zip
+            if [ $? -ne 0 ]; then
+              echo "gdown failed, trying direct curl..."
+              curl -L -b /dev/null -c /dev/null "https://drive.google.com/uc?export=download&id=${FILE_ID}" -o kernel.zip
+            fi
+            # التحقق من أن الملف هو ZIP حقيقي
+            if file kernel.zip | grep -q "Zip archive"; then
+              unzip -q kernel.zip -d kernel-source
+            else
+              echo "Downloaded file is not a valid ZIP archive"
+              exit 1
+            fi
           elif [[ "$URL" == *.git ]]; then
             git clone --depth=1 "$URL" kernel-source
-          # دعم الروابط المباشرة (zip, tar.gz, tar.xz)
           else
             curl -L -o kernel.download "$URL"
             case "$(file -b --mime-type kernel.download)" in
@@ -64,11 +77,14 @@ jobs:
           mkdir -p kernel-source/stock_boot
           if [[ "$BOOT_URL" == *drive.google.com* ]]; then
             ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+')
-            gdown "https://drive.google.com/uc?id=${ID}" -O kernel-source/stock_boot/boot.img
+            if [ -z "$ID" ]; then
+              ID=$(echo "$BOOT_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
+            fi
+            gdown --fuzzy "https://drive.google.com/uc?id=${ID}" -O kernel-source/stock_boot/boot.img
           else
             curl -L -o kernel-source/stock_boot/boot.img "$BOOT_URL"
           fi
-          # تحقق من أنه ليس صفحة HTML
+          # التحقق من أنه ليس صفحة HTML
           if file kernel-source/stock_boot/boot.img | grep -q "HTML"; then
             echo "ERROR: boot.img link returned HTML page"
             rm kernel-source/stock_boot/boot.img
