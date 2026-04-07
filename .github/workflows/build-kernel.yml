@@ -9,7 +9,7 @@ on:
         default: ''
         type: string
       boot_direct_url:
-        description: 'رابط مباشر لـ boot.img - اتركه فارغاً لاستخدام الملف من boot-stock/boot.img'
+        description: 'رابط مباشر لـ boot.img (يدعم Google Drive والروابط العادية) - اتركه فارغاً لاستخدام الملف من boot-stock/boot.img'
         required: false
         default: ''
         type: string
@@ -74,6 +74,7 @@ jobs:
             fi
           fi
 
+      # ========== تثبيت الأدوات الأساسية ==========
       - name: Setup Build Environment
         run: |
           sudo apt update
@@ -96,9 +97,8 @@ jobs:
           mkdir -p kernel-source
 
           # التحقق مما إذا كان الرابط من Google Drive
-          if [[ "$SOURCE_URL" == *drive.google.com* ]] || [[ "$SOURCE_URL" == *docs.google.com* ]]; then
+          if [[ "$SOURCE_URL" == *drive.google.com* ]] || [[ "$SOURCE_URL" == *docs.google.com* ]] || [[ "$SOURCE_URL" == *drive.usercontent.google.com* ]]; then
             echo "Google Drive link detected. Using gdown..."
-            # استخراج FILE_ID من الرابط
             FILE_ID=$(echo "$SOURCE_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
             if [ -z "$FILE_ID" ]; then
               FILE_ID=$(echo "$SOURCE_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
@@ -110,7 +110,6 @@ jobs:
             echo "File ID: $FILE_ID"
             gdown "https://drive.google.com/uc?id=${FILE_ID}" -O kernel-source.download
           else
-            # استخدام curl للروابط العادية
             curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o kernel-source.download "$SOURCE_URL"
           fi
 
@@ -166,16 +165,34 @@ jobs:
             exit 1
           fi
 
-      # ========== 2. الحصول على boot.img (يدعم الروابط العادية فقط) ==========
+      # ========== 2. الحصول على boot.img (يدعم Google Drive والروابط العادية) ==========
       - name: Download boot.img from URL
         id: download_boot
         if: steps.set_boot_url.outputs.effective_boot_url != ''
         run: |
           BOOT_URL="${{ steps.set_boot_url.outputs.effective_boot_url }}"
           mkdir -p kernel-source/stock_boot
-          curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o kernel-source/stock_boot/boot.img "$BOOT_URL"
+          
+          # التحقق مما إذا كان الرابط من Google Drive
+          if [[ "$BOOT_URL" == *drive.google.com* ]] || [[ "$BOOT_URL" == *docs.google.com* ]] || [[ "$BOOT_URL" == *drive.usercontent.google.com* ]]; then
+            echo "Google Drive link detected. Using gdown..."
+            FILE_ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
+            if [ -z "$FILE_ID" ]; then
+              FILE_ID=$(echo "$BOOT_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
+            fi
+            if [ -z "$FILE_ID" ]; then
+              echo "ERROR: Could not extract Google Drive file ID from URL"
+              exit 1
+            fi
+            echo "File ID: $FILE_ID"
+            gdown "https://drive.google.com/uc?id=${FILE_ID}" -O kernel-source/stock_boot/boot.img
+          else
+            curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o kernel-source/stock_boot/boot.img "$BOOT_URL"
+          fi
+          
+          # التحقق من أن الملف ليس HTML
           if file kernel-source/stock_boot/boot.img | grep -q "HTML"; then
-            echo "ERROR: Downloaded boot.img is HTML page."
+            echo "ERROR: Downloaded boot.img is HTML page. Please provide a direct download URL or use Google Drive."
             rm kernel-source/stock_boot/boot.img
             exit 1
           fi
