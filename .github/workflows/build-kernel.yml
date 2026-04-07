@@ -86,7 +86,7 @@ jobs:
             unzip xz-utils python3-pip clang-18 lld-18
           pip install gdown
 
-      # ========== 1. تحميل سورس النواة ==========
+      # ========== 1. تحميل سورس النواة (يدعم Samsung Kernel.tar.gz) ==========
       - name: Download and Extract Kernel Source
         id: download_source
         if: steps.set_kernel_url.outputs.effective_url != ''
@@ -125,6 +125,13 @@ jobs:
                 exit 1
                 ;;
             esac
+          fi
+          # ========== إضافة مهمة: فك ضغط Kernel.tar.gz من ملفات Samsung ==========
+          if [ -f kernel-source/Kernel.tar.gz ]; then
+            echo "Detected Kernel.tar.gz from Samsung source, extracting..."
+            cd kernel-source
+            tar -xvf Kernel.tar.gz && rm Kernel.tar.gz
+            cd ..
           fi
           echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
 
