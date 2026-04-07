@@ -14,6 +14,7 @@ export ANDROID_MAJOR_VERSION=u
 
 export CC=clang-18
 export LD=ld.lld-18
+export HOSTLD=ld.lld-18   # إضافة HOSTLD
 export CROSS_COMPILE=aarch64-linux-gnu-
 export CLANG_TRIPLE=aarch64-linux-gnu-
 
@@ -23,6 +24,7 @@ export BUILD_OPTIONS=(
     ARCH=arm64
     CC=${CC}
     LD=${LD}
+    HOSTLD=${HOSTLD}
     CROSS_COMPILE=${CROSS_COMPILE}
     CLANG_TRIPLE=${CLANG_TRIPLE}
     LLVM=1
@@ -38,6 +40,13 @@ export BUILD_OPTIONS=(
     V=1
     NO_YAML=1
 )
+
+# تأكد من وجود ld.lld في PATH (إنشاء رابط رمزي احتياطي)
+if ! command -v ld.lld &> /dev/null; then
+    echo "[INFO] إنشاء رابط رمزي لـ ld.lld-18 إلى ld.lld"
+    sudo ln -sf $(which ld.lld-18) /usr/local/bin/ld.lld
+    export PATH=/usr/local/bin:$PATH
+fi
 
 remove_gcc_wrapper() {
     if grep -q "REAL_CC" Makefile; then
@@ -152,7 +161,16 @@ build_kernel() {
     fi
 
     disable_samsung_security
+
+    # تعطيل BTF بشكل قاطع
+    echo "[INFO] تعطيل DEBUG_INFO_BTF وكل ما يتعلق بـ BTF..."
     scripts/config --file ".config" --disable CONFIG_DEBUG_INFO_BTF
+    scripts/config --file ".config" --disable CONFIG_DEBUG_INFO
+    scripts/config --file ".config" --disable CONFIG_DEBUG_INFO_REDUCED
+    scripts/config --file ".config" --disable CONFIG_DEBUG_INFO_SPLIT
+    scripts/config --file ".config" --disable CONFIG_DEBUG_INFO_DWARF4
+    scripts/config --file ".config" --disable CONFIG_DEBUG_INFO_DWARF5
+    make "${BUILD_OPTIONS[@]}" olddefconfig
 
     echo "[INFO] بدء تجميع النواة..."
     make "${BUILD_OPTIONS[@]}" Image 2>&1 | tee build.log
