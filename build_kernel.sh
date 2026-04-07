@@ -26,10 +26,14 @@ KERNEL_URL="${KERNEL_URL_ENV}"
 BOOT_URL="${BOOT_URL_ENV}"
 
 if [ -z "$KERNEL_URL" ]; then error "رابط سورس النواة فارغ!"; fi
-if [ -z "$BOOT_URL" ]; then error "رابط boot.img فارغ!"; fi
 
 log "تم استلام رابط النواة: $KERNEL_URL"
-log "تم استلام رابط البوت: $BOOT_URL"
+# === تم التعديل هنا: السماح بوجود boot_url اختياري بدلاً من إجباره ===
+if [ -n "$BOOT_URL" ]; then
+    log "تم استلام رابط البوت: $BOOT_URL"
+else
+    warn "لم يتم توفير رابط boot.img. سيتم تخطي إنشاء boot.img وسيتم إخراج Image فقط."
+fi
 
 echo -e "${GREEN}=== المرحلة 1: تثبيت التبعيات الأساسية ===${NC}"
 if [ ! -f "$HOME/.kernel_deps_installed" ]; then
@@ -153,43 +157,56 @@ make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-none-linux-gn
 if [ ! -f "arch/arm64/boot/Image" ]; then error "فشل التجميع، لم يتم العثور على Image."; fi
 mkdir -p "$BUILD_DIR" && cp arch/arm64/boot/Image "$BUILD_DIR/"
 
-echo -e "${GREEN}=== المرحلة 9: تحضير boot.img ===${NC}"
-mkdir -p "$KERNEL_ROOT/stock_boot"
-if [[ "$BOOT_URL" == *drive.google.com* ]]; then
-    download_google_drive "$BOOT_URL" "$KERNEL_ROOT/stock_boot/boot.img"
-else
-    curl -L -o "$KERNEL_ROOT/stock_boot/boot.img" "$BOOT_URL"
-fi
-
-mkdir -p "$HOME/tools/magisk" && cd "$HOME/tools/magisk"
-wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
-unzip -q -j Magisk-v27.0.apk 'lib/x86_64/libmagiskboot.so' -d .
-mv libmagiskboot.so magiskboot && chmod +x magiskboot
-export PATH="$HOME/tools/magisk:$PATH"
-
-cd "$KERNEL_ROOT"
-mkdir -p boot_work && cp "$KERNEL_ROOT/stock_boot/boot.img" boot_work/
-cd boot_work
-magiskboot unpack boot.img
-
-rm -f kernel kernel.lz4 kernel.gz kernel.bz2
-
-cp "$BUILD_DIR/Image" kernel
-magiskboot repack boot.img
-mv new-boot.img "$BUILD_DIR/boot.img"
-
-echo -e "${GREEN}=== المرحلة 10: إنشاء AnyKernel3.zip ===${NC}"
-if [[ "$AK3_CHOICE_ENV" == "y" || "$AK3_CHOICE_ENV" == "Y" ]]; then
-    cd "$KERNEL_ROOT"
-    if [ ! -d "AnyKernel3" ]; then
-        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+# === تم التعديل هنا: أصبح تحضير boot.img اختيارياً بناءً على وجود BOOT_URL ===
+if [ -n "$BOOT_URL" ]; then
+    echo -e "${GREEN}=== المرحلة 9: تحضير boot.img ===${NC}"
+    mkdir -p "$KERNEL_ROOT/stock_boot"
+    if [[ "$BOOT_URL" == *drive.google.com* ]]; then
+        download_google_drive "$BOOT_URL" "$KERNEL_ROOT/stock_boot/boot.img"
+    else
+        curl -L -o "$KERNEL_ROOT/stock_boot/boot.img" "$BOOT_URL"
     fi
-    cp "$BUILD_DIR/Image" AnyKernel3/
-    cd AnyKernel3
-    zip -r9 "../build/AnyKernel3-$(date +%Y%m%d-%H%M%S).zip" . -x ".git*" "README.md" "*.zip"
-    cd ..
-    log "تم إنشاء AnyKernel3.zip في مجلد build/"
+
+    mkdir -p "$HOME/tools/magisk" && cd "$HOME/tools/magisk"
+    wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+    unzip -q -j Magisk-v27.0.apk 'lib/x86_64/libmagiskboot.so' -d .
+    mv libmagiskboot.so magiskboot && chmod +x magiskboot
+    export PATH="$HOME/tools/magisk:$PATH"
+
+    cd "$KERNEL_ROOT"
+    mkdir -p boot_work && cp "$KERNEL_ROOT/stock_boot/boot.img" boot_work/
+    cd boot_work
+    magiskboot unpack boot.img
+
+    rm -f kernel kernel.lz4 kernel.gz kernel.bz2
+
+    cp "$BUILD_DIR/Image" kernel
+    magiskboot repack boot.img
+    mv new-boot.img "$BUILD_DIR/boot.img"
+else
+    echo -e "${YELLOW}=== المرحلة 9: تخطي إنشاء boot.img (لم يتم توفير رابط) ===${NC}"
 fi
 
-echo -e "${GREEN}=== انتهى بنجاح! تم إنشاء boot.img المدمج بـ KernelSU ===${NC}"
+# === تم التعديل هنا: إنشاء AnyKernel3.zip أصبح إجبارياً وبدون شرط ===
+echo -e "${GREEN}=== المرحلة 10: إنشاء AnyKernel3.zip ===${NC}"
+cd "$KERNEL_ROOT"
+if [ ! -d "AnyKernel3" ]; then
+    git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+fi
+if [ -f "$BUILD_DIR/Image" ]; then
+    cp "$BUILD_DIR/Image" AnyKernel3/
+else
+    error "ملف Image غير موجود في مجلد build. تعذر إنشاء AnyKernel3.zip"
+fi
+cd AnyKernel3
+zip -r9 "../build/AnyKernel3-$(date +%Y%m%d-%H%M%S).zip" . -x ".git*" "README.md" "*.zip"
+cd ..
+log "تم إنشاء AnyKernel3.zip في مجلد build/"
+
+echo -e "${GREEN}=== انتهى بنجاح! ===${NC}"
+if [ -f "$BUILD_DIR/boot.img" ]; then
+    log "تم إنشاء boot.img المدمج بـ KernelSU"
+elif [ -f "$BUILD_DIR/Image" ]; then
+    log "تم إنشاء ملف Image فقط (بدون boot.img)"
+fi
 ls -la "$BUILD_DIR"
