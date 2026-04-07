@@ -18,10 +18,9 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout Repository (scripts & configs)
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # قراءة الروابط الافتراضية
       - name: Read default kernel source URL from file
         id: read_kernel_url
         run: |
@@ -82,12 +81,10 @@ jobs:
             zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
             unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev \
             cpio tofrodos python3-markdown libgl1-mesa-dev libx11-dev libreadline-dev
-          # libtinfo5 for older toolchains (optional)
           wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
           pip install gdown
 
-      # ========== 1. تحميل سورس النواة ==========
       - name: Download and Extract Kernel Source
         id: download_source
         if: steps.set_kernel_url.outputs.effective_url != ''
@@ -106,25 +103,11 @@ jobs:
           fi
           if [ -f kernel-source.download ]; then
             case $(file -b --mime-type kernel-source.download) in
-              application/zip)
-                unzip -q kernel-source.download -d kernel-source
-                ;;
-              application/gzip|application/x-gzip)
-                mv kernel-source.download kernel-source.tar.gz
-                tar -xzf kernel-source.tar.gz -C kernel-source --strip-components=1
-                ;;
-              application/x-xz)
-                mv kernel-source.download kernel-source.tar.xz
-                tar -xJf kernel-source.tar.xz -C kernel-source --strip-components=1
-                ;;
-              application/x-tar)
-                mv kernel-source.download kernel-source.tar
-                tar -xf kernel-source.tar -C kernel-source --strip-components=1
-                ;;
-              text/html)
-                echo "ERROR: HTML page received, not a valid file."
-                exit 1
-                ;;
+              application/zip) unzip -q kernel-source.download -d kernel-source ;;
+              application/gzip|application/x-gzip) mv kernel-source.download kernel-source.tar.gz && tar -xzf kernel-source.tar.gz -C kernel-source --strip-components=1 ;;
+              application/x-xz) mv kernel-source.download kernel-source.tar.xz && tar -xJf kernel-source.tar.xz -C kernel-source --strip-components=1 ;;
+              application/x-tar) mv kernel-source.download kernel-source.tar && tar -xf kernel-source.tar -C kernel-source --strip-components=1 ;;
+              text/html) echo "ERROR: HTML page"; exit 1 ;;
             esac
           fi
           if [ -f kernel-source/Kernel.tar.gz ]; then
@@ -145,7 +128,6 @@ jobs:
             exit 1
           fi
 
-      # ========== 2. تحميل boot.img ==========
       - name: Download boot.img from URL
         id: download_boot
         if: steps.set_boot_url.outputs.effective_boot_url != ''
@@ -175,21 +157,18 @@ jobs:
             cp boot-stock/boot.img kernel-source/stock_boot/
           fi
 
-      # ========== 3. نسخ السكريبت والملفات المساعدة ==========
-      - name: Copy build script and patches to kernel source
+      - name: Copy build script and patches
         run: |
           cp build_a35.sh kernel-source/
           cp custom.config kernel-source/ 2>/dev/null || true
           cp -r patches kernel-source/ 2>/dev/null || true
           chmod +x kernel-source/build_a35.sh
 
-      # ========== 4. بناء النواة ==========
       - name: Build Kernel
         run: |
           cd kernel-source
           ./build_a35.sh
 
-      # ========== 5. رفع المخرجات ==========
       - name: Upload Kernel Image
         uses: actions/upload-artifact@v4
         with:
