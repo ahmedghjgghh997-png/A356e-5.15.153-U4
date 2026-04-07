@@ -1,13 +1,13 @@
-name: Build Kernel
+name: Build Kernel with KernelSU
 
 on:
   workflow_dispatch:
     inputs:
       kernel_url:
-        description: 'رابط سورس النواة'
+        description: 'رابط سورس النواة (ZIP, tar.gz, .git, Google Drive)'
         required: true
       boot_url:
-        description: 'رابط boot.img الأصلي (اختياري)'
+        description: 'رابط boot.img الأصلي (اختياري - يفضل تركه فارغاً واستخدام AnyKernel3)'
         required: false
 
 jobs:
@@ -15,15 +15,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Build kernel
+
+      - name: Run build script
         run: |
           chmod +x build_kernel.sh
-          KERNEL_URL_ENV="${{ github.event.inputs.kernel_url }}" \
-          BOOT_URL_ENV="${{ github.event.inputs.boot_url }}" \
+          INPUT_KERNEL_URL="${{ github.event.inputs.kernel_url }}" \
+          INPUT_BOOT_URL="${{ github.event.inputs.boot_url }}" \
           ./build_kernel.sh
-          
-      - name: Upload artifacts
+        env:
+          AK3_CHOICE_ENV: "y"   # يطلب إنشاء AnyKernel3.zip
+
+      - name: Upload outputs
         uses: actions/upload-artifact@v4
         with:
           name: kernel-output
