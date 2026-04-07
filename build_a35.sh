@@ -107,7 +107,6 @@ merge_custom_config() {
     fi
 }
 
-# ========== AnyKernel3 functions ==========
 prepare_anykernel3() {
     if [ ! -d "AnyKernel3" ]; then
         echo "[INFO] استنساخ AnyKernel3 من osm0sis..."
@@ -126,7 +125,6 @@ create_anykernel3_zip() {
     cd ..
     echo "[SUCCESS] تم إنشاء AnyKernel3.zip في مجلد build/"
 }
-# ========================================
 
 build_kernel() {
     echo "[INFO] استخدام defconfig: s5e8835-a35xjvxx_defconfig"
@@ -137,6 +135,13 @@ build_kernel() {
     remove_gcc_wrapper
     apply_additional_patches
     enable_kprobes
+    add_kernelsu
+
+    echo "[INFO] تعيين خيارات KernelSU تلقائياً..."
+    if [ -f ".config" ]; then
+        scripts/config --file ".config" -e CONFIG_KSU -d CONFIG_KSU_DEBUG -d CONFIG_KSU_DISABLE_MANAGER
+        make "${BUILD_OPTIONS[@]}" olddefconfig > /dev/null 2>&1
+    fi
 
     if [ -n "$GITHUB_ACTIONS" ] || [ -n "$CI" ]; then
         echo "[INFO] بيئة CI، تخطي menuconfig."
@@ -146,15 +151,13 @@ build_kernel() {
     fi
 
     disable_samsung_security
-    add_kernelsu
 
-    echo "[INFO] بدء تجميع النواة (قد يستغرق وقتاً)..."
+    echo "[INFO] بدء تجميع النواة..."
     make "${BUILD_OPTIONS[@]}" Image || { echo "[ERROR] فشل تجميع النواة"; exit 1; }
 
     mkdir -p build
     cp arch/arm64/boot/Image build/
 
-    # تثبيت magiskboot إذا لم يكن موجوداً
     if ! command -v magiskboot &> /dev/null; then
         echo "[INFO] تثبيت magiskboot..."
         mkdir -p tools/magisk
@@ -168,9 +171,8 @@ build_kernel() {
         cd ../..
     fi
 
-    # بناء boot.img إذا وجد stock_boot/boot.img
     if [ -f "stock_boot/boot.img" ]; then
-        echo "[INFO] بناء boot.img باستخدام magiskboot..."
+        echo "[INFO] بناء boot.img..."
         mkdir -p boot_work
         cp stock_boot/boot.img boot_work/
         cd boot_work
@@ -181,17 +183,16 @@ build_kernel() {
         cd ..
         echo "[SUCCESS] تم إنشاء boot.img"
     else
-        echo "[WARN] لا يوجد stock_boot/boot.img، تم بناء Image فقط."
+        echo "[WARN] لا يوجد stock_boot/boot.img، Image فقط."
     fi
 
-    # إنشاء AnyKernel3.zip
     prepare_anykernel3
     create_anykernel3_zip
 
     echo -e "\n[SUCCESS] تم التجميع بنجاح!"
     echo "Image: build/Image"
     [ -f "build/boot.img" ] && echo "boot.img: build/boot.img"
-    ls build/AnyKernel3-*.zip && echo "AnyKernel3.zip: build/AnyKernel3-*.zip"
+    ls build/AnyKernel3-*.zip && echo "AnyKernel3.zip موجود"
 }
 
 build_kernel
