@@ -33,20 +33,44 @@ jobs:
           URL="${{ github.event.inputs.kernel_source_url }}"
           mkdir -p kernel-source
 
+          # دالة للتحميل من Google Drive بطريقة قوية
+          download_google_drive() {
+            local FILE_ID=$1
+            local OUTPUT=$2
+            echo "Downloading from Google Drive with ID: $FILE_ID"
+            # استخدام gdown أولاً
+            if gdown --fuzzy "https://drive.google.com/uc?id=${FILE_ID}" -O "$OUTPUT" 2>/dev/null; then
+              echo "gdown succeeded"
+              return 0
+            fi
+            # إذا فشل، استخدام curl مع حفظ الكوكيز
+            echo "gdown failed, trying curl with cookie..."
+            curl -sc /tmp/cookie "https://drive.google.com/uc?export=download&id=${FILE_ID}" > /dev/null
+            CODE=$(awk '/download/ {print $NF}' /tmp/cookie)
+            curl -Lb /tmp/cookie "https://drive.google.com/uc?export=download&confirm=${CODE}&id=${FILE_ID}" -o "$OUTPUT"
+            if [ $? -eq 0 ] && [ -s "$OUTPUT" ]; then
+              echo "curl download succeeded"
+              return 0
+            fi
+            return 1
+          }
+
           if [[ "$URL" == *drive.google.com* ]]; then
             # استخراج FILE_ID
             FILE_ID=$(echo "$URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+')
             if [ -z "$FILE_ID" ]; then
               FILE_ID=$(echo "$URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
             fi
-            echo "Downloading from Google Drive with ID: $FILE_ID"
-            # استخدام gdown مع خيار fuzzy
-            gdown --fuzzy "https://drive.google.com/uc?id=${FILE_ID}" -O kernel.zip
-            if [ $? -ne 0 ]; then
-              echo "gdown failed, trying direct curl..."
-              curl -L -b /dev/null -c /dev/null "https://drive.google.com/uc?export=download&id=${FILE_ID}" -o kernel.zip
+            if [ -z "$FILE_ID" ]; then
+              echo "ERROR: Could not extract Google Drive file ID"
+              exit 1
             fi
-            # التحقق من أن الملف هو ZIP حقيقي
+            download_google_drive "$FILE_ID" "kernel.zip"
+            if [ $? -ne 0 ]; then
+              echo "Failed to download from Google Drive"
+              exit 1
+            fi
+            # التحقق من صحة الملف
             if file kernel.zip | grep -q "Zip archive"; then
               unzip -q kernel.zip -d kernel-source
             else
@@ -80,7 +104,8 @@ jobs:
             if [ -z "$ID" ]; then
               ID=$(echo "$BOOT_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
             fi
-            gdown --fuzzy "https://drive.google.com/uc?id=${ID}" -O kernel-source/stock_boot/boot.img
+            # استخدام نفس الدالة القوية للتحميل
+            source <(declare -f download_google_drive); download_google_drive "$ID" "kernel-source/stock_boot/boot.img"
           else
             curl -L -o kernel-source/stock_boot/boot.img "$BOOT_URL"
           fi
