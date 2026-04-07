@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       kernel_source_url:
-        description: 'رابط سورس النواة (ZIP, TAR.GZ, TAR.XZ, .git, Google Drive, transfernow)'
+        description: 'رابط سورس النواة (ZIP, TAR.GZ, TAR.XZ, .git, أو Google Drive)'
         required: true
       boot_direct_url:
         description: 'رابط boot.img (مباشر أو Google Drive) - اختياري'
@@ -27,20 +27,14 @@ jobs:
             zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
             unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev cpio tofrodos python3-markdown
           pip install gdown
-          npm install -g transfernow-cli   # لدعم transfernow.net
 
       - name: Download kernel source
         run: |
           URL="${{ github.event.inputs.kernel_source_url }}"
           mkdir -p kernel-source
 
-          # دعم transfernow.net
-          if [[ "$URL" == *transfernow.net* ]]; then
-            CODE=$(echo "$URL" | grep -oP 'utm_source=\K[^&]+')
-            transfernow download "$CODE" -O kernel-source.zip
-            unzip -q kernel-source.zip -d kernel-source
           # دعم Google Drive
-          elif [[ "$URL" == *drive.google.com* ]]; then
+          if [[ "$URL" == *drive.google.com* ]]; then
             ID=$(echo "$URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+')
             gdown "https://drive.google.com/uc?id=${ID}" -O kernel.zip
             unzip -q kernel.zip -d kernel-source
