@@ -1,0 +1,41 @@
+name: Build Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_url:
+        description: 'رابط سورس النواة (Google Drive, git, direct)'
+        required: true
+      boot_url:
+        description: 'رابط boot.img الأصلي (اختياري)'
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout (لجلب السكريبت فقط)
+        uses: actions/checkout@v4
+
+      - name: تشغيل سكريبت البناء
+        run: |
+          chmod +x build_kernel.sh
+          # تمرير الروابط كمتغيرات بيئة لتجنب الإدخال اليدوي
+          echo "${{ github.event.inputs.kernel_url }}" > /tmp/kernel_url
+          echo "${{ github.event.inputs.boot_url }}" > /tmp/boot_url
+          # تعديل السكريبت ليقرأ من الملفات (اختياري، حسب تصميم السكريبت)
+          # لكن الأسهل: تشغيل السكريبت بتوجيه الإدخال:
+          ./build_kernel.sh <<EOF
+          ${{ github.event.inputs.kernel_url }}
+          ${{ github.event.inputs.boot_url }}
+          n
+          n
+          EOF
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      - name: رفع المخرجات
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-output
+          path: kernel-source/build/
