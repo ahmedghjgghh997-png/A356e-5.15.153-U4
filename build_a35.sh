@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380)
-# مع KernelSU + تفعيل KPROBES + Clang 18 + LD.lld-18
+# مع V=1 لعرض الأخطاء التفصيلية
 # ============================================================
 
 export ARCH=arm64
@@ -12,7 +12,6 @@ export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=14
 export ANDROID_MAJOR_VERSION=u
 
-# تحديد Clang و الرابط بشكل صريح
 export CC=clang-18
 export LD=ld.lld-18
 export CROSS_COMPILE=aarch64-linux-gnu-
@@ -28,6 +27,7 @@ export BUILD_OPTIONS=(
     CLANG_TRIPLE=${CLANG_TRIPLE}
     LLVM=1
     LLVM_IAS=1
+    V=1   # إظهار الأوامر الكاملة لتتبع الأخطاء
 )
 
 remove_gcc_wrapper() {
@@ -60,7 +60,7 @@ prepare_stock_defconfig() {
 }
 
 enable_kprobes() {
-    echo "[INFO] تفعيل خيارات KPROBES لدعم KernelSU..."
+    echo "[INFO] تفعيل KPROBES..."
     scripts/config --file ".config" \
         -e CONFIG_KPROBES \
         -e CONFIG_HAVE_KPROBES \
@@ -68,7 +68,7 @@ enable_kprobes() {
 }
 
 disable_samsung_security() {
-    echo "[INFO] تعطيل حماية Samsung (RKP, Knox, DEFEX, FIVE, PROCA)..."
+    echo "[INFO] تعطيل حماية Samsung..."
     scripts/config --file ".config" \
         -d CONFIG_UH \
         -d CONFIG_UH_RKP \
@@ -76,8 +76,6 @@ disable_samsung_security() {
         -d CONFIG_SECURITY_DEFEX \
         -d CONFIG_PROCA \
         -d CONFIG_FIVE
-
-    echo "[INFO] تعطيل فحص CRC..."
     scripts/config --file ".config" --disable CONFIG_MODULE_SIG_FORCE
 }
 
@@ -107,7 +105,6 @@ build_kernel() {
     if [ -n "$GITHUB_ACTIONS" ] || [ -n "$CI" ]; then
         echo "[INFO] بيئة CI، تخطي menuconfig."
     else
-        echo "[INFO] فتح menuconfig..."
         make "${BUILD_OPTIONS[@]}" menuconfig
     fi
 
