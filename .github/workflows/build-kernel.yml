@@ -74,20 +74,20 @@ jobs:
             fi
           fi
 
-      # ========== تثبيت الأدوات الأساسية ==========
+      # ========== تثبيت الأدوات الأساسية (متوافق مع Ubuntu 24.04) ==========
       - name: Setup Build Environment
         run: |
           sudo apt update
           sudo apt install -y bc bison build-essential ccache curl device-tree-compiler \
             flex g++-multilib gcc-multilib git gnupg gperf imagemagick libc6-dev-i386 \
-            libelf-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev \
+            libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev \
             libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
             zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils android-sdk-libsparse-utils \
             unzip xz-utils python3-pip
           mkdir -p $HOME/toolchains
           pip install gdown
 
-      # ========== 1. تحميل وفك ضغط سورس النواة (يدعم Google Drive والروابط العادية) ==========
+      # ========== 1. تحميل وفك ضغط سورس النواة ==========
       - name: Download and Extract Kernel Source
         id: download_source
         if: steps.set_kernel_url.outputs.effective_url != ''
@@ -162,7 +162,7 @@ jobs:
             exit 1
           fi
 
-      # ========== 2. الحصول على boot.img (يدعم Google Drive والروابط العادية) ==========
+      # ========== 2. الحصول على boot.img ==========
       - name: Download boot.img from URL
         id: download_boot
         if: steps.set_boot_url.outputs.effective_boot_url != ''
