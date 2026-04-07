@@ -14,7 +14,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout repository (for scripts & patches)
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install dependencies
@@ -32,64 +32,54 @@ jobs:
         run: |
           URL="${{ github.event.inputs.kernel_source_url }}"
           mkdir -p kernel-source
+          TEMP_FILE="kernel.download"
 
-          # دالة للتحميل من Google Drive بطريقة قوية
           download_google_drive() {
             local FILE_ID=$1
             local OUTPUT=$2
-            echo "Downloading from Google Drive with ID: $FILE_ID"
-            # استخدام gdown أولاً
             if gdown --fuzzy "https://drive.google.com/uc?id=${FILE_ID}" -O "$OUTPUT" 2>/dev/null; then
-              echo "gdown succeeded"
               return 0
             fi
-            # إذا فشل، استخدام curl مع حفظ الكوكيز
-            echo "gdown failed, trying curl with cookie..."
             curl -sc /tmp/cookie "https://drive.google.com/uc?export=download&id=${FILE_ID}" > /dev/null
             CODE=$(awk '/download/ {print $NF}' /tmp/cookie)
             curl -Lb /tmp/cookie "https://drive.google.com/uc?export=download&confirm=${CODE}&id=${FILE_ID}" -o "$OUTPUT"
-            if [ $? -eq 0 ] && [ -s "$OUTPUT" ]; then
-              echo "curl download succeeded"
-              return 0
-            fi
-            return 1
+            return $?
           }
 
           if [[ "$URL" == *drive.google.com* ]]; then
-            # استخراج FILE_ID
-            FILE_ID=$(echo "$URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+')
-            if [ -z "$FILE_ID" ]; then
-              FILE_ID=$(echo "$URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
-            fi
-            if [ -z "$FILE_ID" ]; then
-              echo "ERROR: Could not extract Google Drive file ID"
-              exit 1
-            fi
-            download_google_drive "$FILE_ID" "kernel.zip"
-            if [ $? -ne 0 ]; then
-              echo "Failed to download from Google Drive"
-              exit 1
-            fi
-            # التحقق من صحة الملف
-            if file kernel.zip | grep -q "Zip archive"; then
-              unzip -q kernel.zip -d kernel-source
-            else
-              echo "Downloaded file is not a valid ZIP archive"
-              exit 1
-            fi
+            FILE_ID=$(echo "$URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
+            [ -z "$FILE_ID" ] && FILE_ID=$(echo "$URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
+            download_google_drive "$FILE_ID" "$TEMP_FILE"
           elif [[ "$URL" == *.git ]]; then
             git clone --depth=1 "$URL" kernel-source
+            touch .skip_extract
           else
-            curl -L -o kernel.download "$URL"
-            case "$(file -b --mime-type kernel.download)" in
-              application/zip) unzip -q kernel.download -d kernel-source ;;
-              application/gzip) tar -xzf kernel.download -C kernel-source --strip-components=1 ;;
-              application/x-xz) tar -xJf kernel.download -C kernel-source --strip-components=1 ;;
-              *) echo "Unsupported format"; exit 1 ;;
+            curl -L -o "$TEMP_FILE" "$URL"
+          fi
+
+          if [ ! -f .skip_extract ]; then
+            MIME=$(file -b --mime-type "$TEMP_FILE")
+            echo "Detected MIME: $MIME"
+            case "$MIME" in
+              application/zip)
+                unzip -q "$TEMP_FILE" -d kernel-source
+                ;;
+              application/gzip|application/x-gzip)
+                tar -xzf "$TEMP_FILE" -C kernel-source --strip-components=1
+                ;;
+              application/x-xz)
+                tar -xJf "$TEMP_FILE" -C kernel-source --strip-components=1
+                ;;
+              application/x-tar)
+                tar -xf "$TEMP_FILE" -C kernel-source --strip-components=1
+                ;;
+              *)
+                echo "Unknown format, moving raw file"
+                mv "$TEMP_FILE" kernel-source/
+                ;;
             esac
           fi
 
-          # معالجة Kernel.tar.gz (من Samsung)
           if [ -f kernel-source/Kernel.tar.gz ]; then
             cd kernel-source && tar -xvf Kernel.tar.gz && rm Kernel.tar.gz && cd ..
           fi
@@ -101,17 +91,13 @@ jobs:
           mkdir -p kernel-source/stock_boot
           if [[ "$BOOT_URL" == *drive.google.com* ]]; then
             ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+')
-            if [ -z "$ID" ]; then
-              ID=$(echo "$BOOT_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
-            fi
-            # استخدام نفس الدالة القوية للتحميل
-            source <(declare -f download_google_drive); download_google_drive "$ID" "kernel-source/stock_boot/boot.img"
+            [ -z "$ID" ] && ID=$(echo "$BOOT_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
+            gdown --fuzzy "https://drive.google.com/uc?id=${ID}" -O kernel-source/stock_boot/boot.img
           else
             curl -L -o kernel-source/stock_boot/boot.img "$BOOT_URL"
           fi
-          # التحقق من أنه ليس صفحة HTML
           if file kernel-source/stock_boot/boot.img | grep -q "HTML"; then
-            echo "ERROR: boot.img link returned HTML page"
+            echo "ERROR: boot.img link returned HTML"
             rm kernel-source/stock_boot/boot.img
             exit 1
           fi
