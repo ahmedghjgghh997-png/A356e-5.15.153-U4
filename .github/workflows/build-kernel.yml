@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       kernel_source_url:
-        description: 'رابط سورس النواة (ZIP, TAR.GZ, TAR.XZ, أو repo .git أو رابط Google Drive) - اتركه فارغاً لاستخدام السورس الموجود في مجلد kernel/ بالمستودع'
+        description: 'رابط سورس النواة (ZIP, TAR.GZ, TAR.XZ, أو repo .git أو رابط Google Drive)'
         required: false
         default: ''
         type: string
       boot_direct_url:
-        description: 'رابط مباشر لـ boot.img (يدعم Google Drive والروابط العادية) - اتركه فارغاً لاستخدام الملف من boot-stock/boot.img'
+        description: 'رابط مباشر لـ boot.img'
         required: false
         default: ''
         type: string
@@ -18,26 +18,24 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout Repository (scripts & configs)
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # ========== قراءة الروابط الافتراضية ==========
-      - name: Read default kernel source URL from file
+      # قراءة الروابط الافتراضية من الملفات
+      - name: Read default kernel source URL
         id: read_kernel_url
         run: |
           if [ -f "kernel_source_url.txt" ]; then
-            DEFAULT_URL=$(cat kernel_source_url.txt | head -1)
-            echo "default_url=$DEFAULT_URL" >> $GITHUB_OUTPUT
+            echo "default_url=$(cat kernel_source_url.txt | head -1)" >> $GITHUB_OUTPUT
           else
             echo "default_url=" >> $GITHUB_OUTPUT
           fi
 
-      - name: Read default boot URL from file
+      - name: Read default boot URL
         id: read_boot_url
         run: |
           if [ -f "boot_url.txt" ]; then
-            DEFAULT_BOOT=$(cat boot_url.txt | head -1)
-            echo "default_boot_url=$DEFAULT_BOOT" >> $GITHUB_OUTPUT
+            echo "default_boot_url=$(cat boot_url.txt | head -1)" >> $GITHUB_OUTPUT
           else
             echo "default_boot_url=" >> $GITHUB_OUTPUT
           fi
@@ -45,34 +43,22 @@ jobs:
       - name: Set effective kernel source URL
         id: set_kernel_url
         run: |
-          INPUT_URL="${{ github.event.inputs.kernel_source_url }}"
-          if [ -n "$INPUT_URL" ]; then
-            echo "effective_url=$INPUT_URL" >> $GITHUB_OUTPUT
+          if [ -n "${{ github.event.inputs.kernel_source_url }}" ]; then
+            echo "effective_url=${{ github.event.inputs.kernel_source_url }}" >> $GITHUB_OUTPUT
           else
-            DEFAULT_URL="${{ steps.read_kernel_url.outputs.default_url }}"
-            if [ -n "$DEFAULT_URL" ]; then
-              echo "effective_url=$DEFAULT_URL" >> $GITHUB_OUTPUT
-            else
-              echo "effective_url=" >> $GITHUB_OUTPUT
-            fi
+            echo "effective_url=${{ steps.read_kernel_url.outputs.default_url }}" >> $GITHUB_OUTPUT
           fi
 
       - name: Set effective boot URL
         id: set_boot_url
         run: |
-          INPUT_BOOT="${{ github.event.inputs.boot_direct_url }}"
-          if [ -n "$INPUT_BOOT" ]; then
-            echo "effective_boot_url=$INPUT_BOOT" >> $GITHUB_OUTPUT
+          if [ -n "${{ github.event.inputs.boot_direct_url }}" ]; then
+            echo "effective_boot_url=${{ github.event.inputs.boot_direct_url }}" >> $GITHUB_OUTPUT
           else
-            DEFAULT_BOOT="${{ steps.read_boot_url.outputs.default_boot_url }}"
-            if [ -n "$DEFAULT_BOOT" ]; then
-              echo "effective_boot_url=$DEFAULT_BOOT" >> $GITHUB_OUTPUT
-            else
-              echo "effective_boot_url=" >> $GITHUB_OUTPUT
-            fi
+            echo "effective_boot_url=${{ steps.read_boot_url.outputs.default_boot_url }}" >> $GITHUB_OUTPUT
           fi
 
-      # ========== تثبيت بيئة البناء والأدوات الحديثة ==========
+      # تثبيت البيئة الأساسية (clang-18 و lld-18 موجودان افتراضياً في Ubuntu 24.04)
       - name: Setup Build Environment
         run: |
           sudo apt update
@@ -81,57 +67,27 @@ jobs:
             libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev \
             libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
             zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
-            unzip xz-utils python3-pip wget tar
-          mkdir -p $HOME/toolchains
+            unzip xz-utils python3-pip clang-18 lld-18
           pip install gdown
 
-      - name: Install Clang/LLVM 22.1.0
-        run: |
-          wget https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/clang+llvm-22.1.0-x86_64-linux-gnu-ubuntu-24.04.tar.xz
-          tar -xf clang+llvm-22.1.0-x86_64-linux-gnu-ubuntu-24.04.tar.xz
-          sudo mv clang+llvm-22.1.0-x86_64-linux-gnu-ubuntu-24.04 /usr/local/llvm
-          echo "/usr/local/llvm/bin" >> $GITHUB_PATH
-
-      - name: Install GNU Arm Embedded Toolchain 15.2
-        run: |
-          wget https://developer.arm.com/-/media/Files/downloads/gnu/15.2.rel1/binrel/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi.tar.xz
-          tar -xf arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi.tar.xz
-          sudo mv arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi /usr/local/gcc-arm
-          echo "/usr/local/gcc-arm/bin" >> $GITHUB_PATH
-
-      - name: Install GNU Binutils 2.46
-        run: |
-          wget https://ftp.gnu.org/gnu/binutils/binutils-2.46.tar.xz
-          tar -xf binutils-2.46.tar.xz
-          cd binutils-2.46
-          ./configure --prefix=/usr/local/binutils --disable-gdb --disable-gdbserver --disable-sim
-          make -j$(nproc)
-          sudo make install
-          echo "/usr/local/binutils/bin" >> $GITHUB_PATH
-
-      # ========== تحميل السورس ==========
+      # تحميل السورس
       - name: Download and Extract Kernel Source
         id: download_source
         if: steps.set_kernel_url.outputs.effective_url != ''
         run: |
           SOURCE_URL="${{ steps.set_kernel_url.outputs.effective_url }}"
-          echo "Downloading from: $SOURCE_URL"
           mkdir -p kernel-source
-          if [[ "$SOURCE_URL" == *drive.google.com* ]] || [[ "$SOURCE_URL" == *docs.google.com* ]] || [[ "$SOURCE_URL" == *drive.usercontent.google.com* ]]; then
-            FILE_ID=$(echo "$SOURCE_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
-            [ -z "$FILE_ID" ] && FILE_ID=$(echo "$SOURCE_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
+          if [[ "$SOURCE_URL" == *drive.google.com* ]]; then
+            FILE_ID=$(echo "$SOURCE_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+')
             gdown "https://drive.google.com/uc?id=${FILE_ID}" -O kernel-source.download
           else
-            curl -L -A "Mozilla/5.0" -o kernel-source.download "$SOURCE_URL"
+            curl -L -o kernel-source.download "$SOURCE_URL"
           fi
-          FILE_TYPE=$(file -b --mime-type kernel-source.download)
-          case "$FILE_TYPE" in
+          case $(file -b --mime-type kernel-source.download) in
             application/zip) unzip -q kernel-source.download -d kernel-source ;;
-            application/gzip|application/x-gzip) mv kernel-source.download kernel-source.tar.gz && tar -xzf kernel-source.tar.gz -C kernel-source --strip-components=1 ;;
+            application/gzip) mv kernel-source.download kernel-source.tar.gz && tar -xzf kernel-source.tar.gz -C kernel-source --strip-components=1 ;;
             application/x-xz) mv kernel-source.download kernel-source.tar.xz && tar -xJf kernel-source.tar.xz -C kernel-source --strip-components=1 ;;
-            application/x-tar) mv kernel-source.download kernel-source.tar && tar -xf kernel-source.tar -C kernel-source --strip-components=1 ;;
-            text/html) echo "ERROR: HTML page received"; exit 1 ;;
-            *) mkdir -p kernel-source-temp && mv kernel-source.download kernel-source-temp/ && if [ -f kernel-source-temp/Makefile ]; then mv kernel-source-temp/* kernel-source/; else exit 1; fi ;;
+            *) echo "Unsupported format"; exit 1 ;;
           esac
           echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
 
@@ -141,20 +97,18 @@ jobs:
           if [ -d "kernel" ]; then
             mkdir -p kernel-source
             rsync -av ./kernel/ kernel-source/
-            echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
           else
-            echo "ERROR: No kernel source provided."
             exit 1
           fi
 
-      # ========== تحميل boot.img ==========
-      - name: Download boot.img from URL
+      # تحميل boot.img
+      - name: Download boot.img
         id: download_boot
         if: steps.set_boot_url.outputs.effective_boot_url != ''
         run: |
           BOOT_URL="${{ steps.set_boot_url.outputs.effective_boot_url }}"
           mkdir -p kernel-source/stock_boot
-          if [[ "$BOOT_URL" == *drive.google.com* ]] || [[ "$BOOT_URL" == *docs.google.com* ]]; then
+          if [[ "$BOOT_URL" == *drive.google.com* ]]; then
             FILE_ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+')
             gdown "https://drive.google.com/uc?id=${FILE_ID}" -O kernel-source/stock_boot/boot.img
           else
@@ -164,33 +118,27 @@ jobs:
             rm kernel-source/stock_boot/boot.img
             exit 1
           fi
-          echo "success=true" >> $GITHUB_OUTPUT
 
-      - name: Use boot.img from repository (fallback)
-        if: |
-          steps.set_boot_url.outputs.effective_boot_url == '' ||
-          (steps.set_boot_url.outputs.effective_boot_url != '' && steps.download_boot.outputs.success != 'true')
+      - name: Use boot.img from repository
+        if: steps.set_boot_url.outputs.effective_boot_url == ''
         run: |
           if [ -f "boot-stock/boot.img" ]; then
             mkdir -p kernel-source/stock_boot
             cp boot-stock/boot.img kernel-source/stock_boot/
           fi
 
-      # ========== نسخ السكريبت والملفات المساعدة ==========
-      - name: Copy build script and patches to kernel source
+      - name: Copy build script and patches
         run: |
           cp build_a35.sh kernel-source/
           cp custom.config kernel-source/ 2>/dev/null || true
           cp -r patches kernel-source/ 2>/dev/null || true
           chmod +x kernel-source/build_a35.sh
 
-      # ========== بناء النواة ==========
       - name: Build Kernel
         run: |
           cd kernel-source
           ./build_a35.sh
 
-      # ========== رفع المخرجات ==========
       - name: Upload Kernel Image
         uses: actions/upload-artifact@v4
         with:
@@ -208,6 +156,7 @@ jobs:
         run: |
           cd kernel-source/build
           tar -cvf Custom-Kernel.tar boot.img
+
       - name: Upload Odin tar
         if: hashFiles('kernel-source/build/Custom-Kernel.tar') != ''
         uses: actions/upload-artifact@v4
