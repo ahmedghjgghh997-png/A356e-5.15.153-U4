@@ -1,11 +1,11 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380)
-# يتبع خطوات الدليل بالترتيب، مع إمكانية إدخال روابط خارجية
+# تم إضافة دمج KernelSU وإصلاحات GitHub Actions
 # ============================================================
 
-# إيقاف التشغيل عند أول خطأ
-set -e
+# إيقاف التشغيل عند أول خطأ (مع التأكد من اكتشاف أخطاء Make)
+set -eo pipefail
 
 # الألوان للطباعة
 RED='\033[0;31m'
@@ -46,11 +46,19 @@ check_command() {
 }
 
 # ========================
-# 1. إدخال الروابط من المستخدم
+# 1. إدخال الروابط من المستخدم (أو من GitHub Actions)
 # ========================
 echo -e "${GREEN}=== المرحلة 0: إدخال الروابط ===${NC}"
-read -p "أدخل رابط سورس النواة (مباشر، Google Drive، أو git): " KERNEL_URL
-read -p "أدخل رابط boot.img الأصلي (اختياري، اتركه فارغاً إذا لم يتوفر): " BOOT_URL
+# سحب المتغيرات من بيئة العمل لو كانت موجودة (مهم لـ GitHub Actions)
+KERNEL_URL=${KERNEL_URL_ENV:-""}
+BOOT_URL=${BOOT_URL_ENV:-""}
+MENU_CHOICE=${MENU_CHOICE_ENV:-""}
+AK3_CHOICE=${AK3_CHOICE_ENV:-""}
+
+if [ -z "$KERNEL_URL" ]; then
+    read -p "أدخل رابط سورس النواة (مباشر، Google Drive، أو git): " KERNEL_URL
+    read -p "أدخل رابط boot.img الأصلي (اختياري، اتركه فارغاً إذا لم يتوفر): " BOOT_URL
+fi
 
 if [ -z "$KERNEL_URL" ]; then
     error "لا يمكن المتابعة بدون رابط سورس النواة."
@@ -73,7 +81,8 @@ if [ ! -f "$HOME/.kernel_deps_installed" ]; then
             libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
             zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
             unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev cpio tofrodos python3-markdown
-        pip install gdown
+        # إضافة break-system-packages لإصلاح مشكلة Ubuntu 24
+        pip install gdown --break-system-packages 2>/dev/null || pip3 install gdown
         touch "$HOME/.kernel_deps_installed"
     elif command -v dnf &> /dev/null; then
         log "نظام Fedora/RHEL detected. جاري تثبيت التبعيات..."
@@ -83,7 +92,7 @@ if [ ! -f "$HOME/.kernel_deps_installed" ]; then
             ncurses-devel libX11-devel readline-devel mesa-libGL-devel python3-markdown \
             libxml2 libxslt dos2unix kmod openssl elfutils-libelf-devel dwarves \
             openssl-devel libarchive zstd rsync clang lld
-        pip3 install gdown
+        pip3 install gdown --break-system-packages 2>/dev/null || pip3 install gdown
         touch "$HOME/.kernel_deps_installed"
     else
         error "نظام غير مدعوم. يرجى تثبيت التبعيات يدويًا حسب الدليل."
@@ -93,7 +102,7 @@ else
 fi
 
 # ========================
-# 3. تحميل سلاسل الأدوات (Toolchains) – لنسخة 5.15
+# 3. تحميل سلاسل الأدوات (Toolchains)
 # ========================
 echo -e "${GREEN}=== المرحلة 2: تحميل سلاسل الأدوات ===${NC}"
 mkdir -p "$TOOLCHAINS_DIR"
@@ -123,13 +132,10 @@ else
     log "arm-gnu-toolchain-14.2 موجود مسبقًا. تخطي..."
 fi
 
-# إضافة إلى PATH
 export PATH="$TOOLCHAINS_DIR/clang-r450784e/bin:$TOOLCHAINS_DIR/arm-gnu-toolchain-14.2/bin:$PATH"
 export CROSS_COMPILE=aarch64-none-linux-gnu-
 export CC=clang
 export CLANG_TRIPLE=aarch64-linux-gnu-
-
-log "تم إعداد سلاسل الأدوات."
 
 # ========================
 # 4. تحميل سورس النواة وفك ضغطه
@@ -139,7 +145,6 @@ rm -rf "$KERNEL_ROOT"
 mkdir -p "$KERNEL_ROOT"
 cd "$KERNEL_ROOT"
 
-# دالة للتحميل من Google Drive
 download_google_drive() {
     local URL="$1"
     local OUTPUT="$2"
@@ -153,7 +158,6 @@ download_google_drive() {
     gdown "https://drive.google.com/uc?id=${FILE_ID}" -O "$OUTPUT"
 }
 
-# تحميل الملف بناءً على نوع الرابط
 TEMP_FILE="source_download"
 if [[ "$KERNEL_URL" == *drive.google.com* ]]; then
     log "تحميل من Google Drive..."
@@ -167,7 +171,6 @@ else
     curl -L -o "$TEMP_FILE" "$KERNEL_URL"
 fi
 
-# فك الضغط إذا لم يكن git
 if [ ! -f .skip_extract ]; then
     MIME=$(file -b --mime-type "$TEMP_FILE")
     log "نوع الملف المكتشف: $MIME"
@@ -190,102 +193,87 @@ if [ ! -f .skip_extract ]; then
     rm -f "$TEMP_FILE"
 fi
 
-# معالجة Kernel.tar.gz الخاص بسامسونج (إذا وجد داخل المجلد)
 if [ -f "Kernel.tar.gz" ]; then
     log "تم العثور على Kernel.tar.gz، جاري فك ضغطه..."
     tar -xzf Kernel.tar.gz && rm Kernel.tar.gz
 fi
 
-# التأكد من وجود Makefile
 if [ ! -f "Makefile" ]; then
     error "لم يتم العثور على Makefile. ربما فك الضغط لم يتم بشكل صحيح."
 fi
 
-log "تم تحضير سورس النواة في: $KERNEL_ROOT"
+# ========================
+# 5. حقن وتثبيت KernelSU
+# ========================
+echo -e "${GREEN}=== المرحلة 4: حقن كود KernelSU ===${NC}"
+log "جاري تحميل ودمج KernelSU داخل النواة..."
+curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+log "تم دمج كود KernelSU بنجاح في السورس."
 
 # ========================
-# 5. التحضير للتجميع (إعدادات إضافية)
+# 6. التحضير للتجميع وتجهيز defconfig
 # ========================
-echo -e "${GREEN}=== المرحلة 4: التحضير للتجميع ===${NC}"
-# تصدير متغيرات Samsung الإلزامية (حسب الدليل)
+echo -e "${GREEN}=== المرحلة 5: التحضير وتجهيز defconfig ===${NC}"
 export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=14
 export ANDROID_MAJOR_VERSION=u
 
-# إزالة GCC wrapper (لأجهزة Exynos)
-if grep -q "REAL_CC" Makefile; then
-    log "إزالة REAL_CC من Makefile"
-    sed -i '/REAL_CC/d' Makefile
-fi
-if grep -q "CFP_CC" Makefile; then
-    log "إزالة CFP_CC من Makefile"
-    sed -i '/CFP_CC/d' Makefile
-fi
-if grep -q "wrapper" Makefile; then
-    log "إزالة سطور wrapper من Makefile"
-    sed -i '/wrapper/d' Makefile
-fi
+if grep -q "REAL_CC" Makefile; then sed -i '/REAL_CC/d' Makefile; fi
+if grep -q "CFP_CC" Makefile; then sed -i '/CFP_CC/d' Makefile; fi
+if grep -q "wrapper" Makefile; then sed -i '/wrapper/d' Makefile; fi
 
-# ========================
-# 6. تجهيز defconfig
-# ========================
-echo -e "${GREEN}=== المرحلة 5: تجهيز defconfig ===${NC}"
 DEFCONFIG="s5e8835-a35xjvxx_defconfig"
 log "استخدام defconfig: $DEFCONFIG"
 
 make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- $DEFCONFIG
 
-# إنشاء stock_defconfig لتجنب مشكلة "internal problem"
 if [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
-    log "إنشاء stock_defconfig كنسخة احتياطية"
     cp "arch/arm64/configs/$DEFCONFIG" "arch/arm64/configs/stock_defconfig"
 fi
 
 # ========================
-# 7. تخصيص النواة (menuconfig اختياري)
+# 7. تخصيص النواة (menuconfig)
 # ========================
 echo -e "${GREEN}=== المرحلة 6: تخصيص النواة (اختياري) ===${NC}"
-read -p "هل تريد فتح menuconfig لتعديل الإعدادات يدويًا؟ (y/n): " MENU_CHOICE
+if [ -z "$MENU_CHOICE" ]; then
+    read -p "هل تريد فتح menuconfig لتعديل الإعدادات يدويًا؟ (y/n): " MENU_CHOICE
+fi
+
 if [[ "$MENU_CHOICE" == "y" || "$MENU_CHOICE" == "Y" ]]; then
-    log "فتح menuconfig..."
-    make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- menuconfig
-else
-    log "تخطي menuconfig."
+    if [ ! -t 0 ]; then
+        warn "أنت تعمل في بيئة غير تفاعلية (GitHub Actions). سيتم تخطي menuconfig تجنباً لتوقف السكريبت."
+    else
+        make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- menuconfig
+    fi
 fi
 
 # ========================
-# 8. تعطيل حماية سامسونج (nuke) عبر تعديل .config
+# 8. تعطيل حماية سامسونج وتفعيل KernelSU
 # ========================
-echo -e "${GREEN}=== المرحلة 7: تعطيل حماية سامسونج ===${NC}"
-log "تعطيل خيارات الحماية..."
+echo -e "${GREEN}=== المرحلة 7: تعطيل حماية سامسونج وتفعيل KSU ===${NC}"
+log "تعطيل خيارات الحماية وتفعيل KernelSU..."
 
-# استخدام scripts/config إن وجد، وإلا استخدام sed
 if [ -f "scripts/config" ]; then
+    # تعطيل الحمايات بالكامل (محدثة لمنع البوت لوب)
     scripts/config --file ".config" -d CONFIG_UH -d CONFIG_UH_RKP -d CONFIG_RKP_CFP \
-        -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE
-    scripts/config --file ".config" --disable CONFIG_MODULE_SIG_FORCE
+        -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE -d CONFIG_SECURITY_DSMS \
+        -d CONFIG_KNOX_KAP -d CONFIG_SAMSUNG_FREECESS -d CONFIG_MODULE_SIG_FORCE
+    
+    # تفعيل KSU ومتطلباته
+    scripts/config --file ".config" -e CONFIG_KPROBES -e CONFIG_HAVE_KPROBES -e CONFIG_KPROBE_EVENTS -e CONFIG_KSU
 else
     warn "scripts/config غير موجود. سيتم استخدام sed."
     sed -i 's/CONFIG_UH=y/# CONFIG_UH is not set/g' .config
-    sed -i 's/CONFIG_UH_RKP=y/# CONFIG_UH_RKP is not set/g' .config
-    sed -i 's/CONFIG_RKP_CFP=y/# CONFIG_RKP_CFP is not set/g' .config
     sed -i 's/CONFIG_SECURITY_DEFEX=y/# CONFIG_SECURITY_DEFEX is not set/g' .config
-    sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' .config
-    sed -i 's/CONFIG_FIVE=y/# CONFIG_FIVE is not set/g' .config
-    sed -i 's/CONFIG_MODULE_SIG_FORCE=y/# CONFIG_MODULE_SIG_FORCE is not set/g' .config
-fi
-
-# تفعيل KPROBES (ضروري لـ KernelSU)
-if [ -f "scripts/config" ]; then
-    scripts/config --file ".config" -e CONFIG_KPROBES -e CONFIG_HAVE_KPROBES -e CONFIG_KPROBE_EVENTS
-else
+    # تفعيل ksu يدويا
     echo "CONFIG_KPROBES=y" >> .config
     echo "CONFIG_HAVE_KPROBES=y" >> .config
     echo "CONFIG_KPROBE_EVENTS=y" >> .config
+    echo "CONFIG_KSU=y" >> .config
 fi
 
 # ========================
-# 9. تطبيق الباتشات الإضافية (إذا وجد مجلد patches)
+# 9. تطبيق الباتشات الإضافية (من كودك الأصلي)
 # ========================
 if [ -d "$PWD/patches" ]; then
     echo -e "${GREEN}=== المرحلة 8: تطبيق الباتشات الإضافية ===${NC}"
@@ -295,15 +283,13 @@ if [ -d "$PWD/patches" ]; then
             git apply --check "$patch" && git apply "$patch" || warn "فشل تطبيق $patch (قد يكون مطبقًا مسبقًا)"
         fi
     done
-else
-    log "لا يوجد مجلد patches، تخطي."
 fi
 
 # ========================
 # 10. ترجمة النواة (بناء Image)
 # ========================
 echo -e "${GREEN}=== المرحلة 9: ترجمة النواة ===${NC}"
-log "بدء التجميع (قد يستغرق وقتًا طويلاً)..."
+log "بدء التجميع..."
 make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- Image 2>&1 | tee "$LOG_FILE"
 
 if [ ! -f "arch/arm64/boot/Image" ]; then
@@ -315,7 +301,7 @@ cp arch/arm64/boot/Image "$BUILD_DIR/"
 log "تم إنشاء Image في: $BUILD_DIR/Image"
 
 # ========================
-# 11. تحميل boot.img الأصلي (إذا تم توفير رابط) وتحضير boot.img الجديد
+# 11. تحميل boot.img الأصلي (من كودك الأصلي)
 # ========================
 if [ -n "$BOOT_URL" ]; then
     echo -e "${GREEN}=== المرحلة 10: تحضير boot.img ===${NC}"
@@ -330,7 +316,6 @@ if [ -n "$BOOT_URL" ]; then
         error "فشل تحميل boot.img"
     fi
 
-    # تثبيت magiskboot
     if ! command -v magiskboot &> /dev/null; then
         log "تثبيت magiskboot..."
         mkdir -p tools/magisk && cd tools/magisk
@@ -351,16 +336,17 @@ if [ -n "$BOOT_URL" ]; then
     magiskboot repack boot.img
     mv new-boot.img "$BUILD_DIR/boot.img"
     cd ..
-    log "تم إنشاء boot.img في: $BUILD_DIR/boot.img"
-else
-    warn "لم يتم توفير رابط boot.img الأصلي. لن يتم إنشاء boot.img."
+    log "تم إنشاء boot.img بداخلها KernelSU في: $BUILD_DIR/boot.img"
 fi
 
 # ========================
-# 12. إنشاء AnyKernel3.zip (اختياري، إذا أردت)
+# 12. إنشاء AnyKernel3.zip (من كودك الأصلي)
 # ========================
 echo -e "${GREEN}=== المرحلة 11: إنشاء AnyKernel3.zip (اختياري) ===${NC}"
-read -p "هل تريد إنشاء حزمة AnyKernel3.zip؟ (y/n): " AK3_CHOICE
+if [ -z "$AK3_CHOICE" ]; then
+    read -p "هل تريد إنشاء حزمة AnyKernel3.zip؟ (y/n): " AK3_CHOICE
+fi
+
 if [[ "$AK3_CHOICE" == "y" || "$AK3_CHOICE" == "Y" ]]; then
     if [ ! -d "AnyKernel3" ]; then
         git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
@@ -370,13 +356,11 @@ if [[ "$AK3_CHOICE" == "y" || "$AK3_CHOICE" == "Y" ]]; then
     zip -r9 "../build/AnyKernel3-$(date +%Y%m%d-%H%M%S).zip" . -x ".git*" "README.md" "*.zip"
     cd ..
     log "تم إنشاء AnyKernel3.zip في مجلد build/"
-else
-    log "تخطي إنشاء AnyKernel3.zip."
 fi
 
 # ========================
 # النهاية
 # ========================
-echo -e "${GREEN}=== انتهى السكريبت بنجاح ===${NC}"
+echo -e "${GREEN}=== انتهى السكريبت بنجاح وتم دمج KernelSU ===${NC}"
 echo "الملفات الناتجة موجودة في: $BUILD_DIR"
 ls -la "$BUILD_DIR"
