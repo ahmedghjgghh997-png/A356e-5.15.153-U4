@@ -1,6 +1,7 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 مع KernelSU
+# تم التحديث بناءً على إعدادات سامسونج الرسمية (LLVM=1)
 # ============================================================
 
 set -eo pipefail
@@ -21,12 +22,6 @@ log() { echo -e "${GREEN}[INFO]${NC} $1" | tee -a "$LOG_FILE"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1" | tee -a "$LOG_FILE"; }
 error() { echo -e "${RED}[ERROR] $1${NC}"; exit 1; }
 
-check_command() {
-    if ! command -v "$1" &> /dev/null; then
-        error "$1 غير موجود. قم بتثبيته أولاً."
-    fi
-}
-
 echo -e "${GREEN}=== المرحلة 0: إدخال الروابط ===${NC}"
 KERNEL_URL="${KERNEL_URL_ENV}"
 BOOT_URL="${BOOT_URL_ENV}"
@@ -39,30 +34,15 @@ log "تم استلام رابط البوت: $BOOT_URL"
 
 echo -e "${GREEN}=== المرحلة 1: تثبيت التبعيات الأساسية ===${NC}"
 if [ ! -f "$HOME/.kernel_deps_installed" ]; then
-    if command -v apt &> /dev/null; then
-        log "نظام Ubuntu/Debian detected. جاري تثبيت التبعيات..."
-        sudo apt-get update -y
-        sudo apt-get install -y bc bison build-essential ccache curl device-tree-compiler \
-            flex g++-multilib gcc-multilib git gnupg gperf imagemagick libc6-dev-i386 \
-            libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev \
-            libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
-            zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
-            unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev cpio tofrodos python3-markdown
-        pip install gdown --break-system-packages 2>/dev/null || true
-        touch "$HOME/.kernel_deps_installed"
-    elif command -v dnf &> /dev/null; then
-        log "نظام Fedora/RHEL detected. جاري تثبيت التبعيات..."
-        sudo dnf group install -y "c-development" "development-tools"
-        sudo dnf install -y git dtc lz4 xz zlib-devel java-17-openjdk-devel python3 \
-            p7zip p7zip-plugins android-tools erofs-utils java-latest-openjdk-devel \
-            ncurses-devel libX11-devel readline-devel mesa-libGL-devel python3-markdown \
-            libxml2 libxslt dos2unix kmod openssl elfutils-libelf-devel dwarves \
-            openssl-devel libarchive zstd rsync clang lld
-        pip3 install gdown --break-system-packages 2>/dev/null || true
-        touch "$HOME/.kernel_deps_installed"
-    else
-        error "نظام غير مدعوم. يرجى تثبيت التبعيات يدويًا حسب الدليل."
-    fi
+    sudo apt-get update -y
+    sudo apt-get install -y bc bison build-essential ccache curl device-tree-compiler \
+        flex g++-multilib gcc-multilib git gnupg gperf imagemagick libc6-dev-i386 \
+        libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev \
+        libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
+        zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
+        unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev cpio tofrodos python3-markdown
+    pip install gdown --break-system-packages 2>/dev/null || true
+    touch "$HOME/.kernel_deps_installed"
 fi
 
 echo -e "${GREEN}=== المرحلة 2: تحميل سلاسل الأدوات ===${NC}"
@@ -88,9 +68,6 @@ if [ ! -d "$TOOLCHAINS_DIR/arm-gnu-toolchain-14.2" ]; then
 fi
 
 export PATH="$TOOLCHAINS_DIR/clang-r450784e/bin:$TOOLCHAINS_DIR/arm-gnu-toolchain-14.2/bin:$PATH"
-export CROSS_COMPILE=aarch64-none-linux-gnu-
-export CC=clang
-export CLANG_TRIPLE=aarch64-linux-gnu-
 
 echo -e "${GREEN}=== المرحلة 3: تحميل سورس النواة ===${NC}"
 rm -rf "$KERNEL_ROOT" && mkdir -p "$KERNEL_ROOT" && cd "$KERNEL_ROOT"
@@ -130,40 +107,28 @@ echo -e "${GREEN}=== المرحلة 4: حقن كود KernelSU ===${NC}"
 curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
 echo -e "${GREEN}=== المرحلة 5: التحضير وتجهيز defconfig ===${NC}"
+# --- الأسرار التي اكتشفناها من كود سامسونج ---
 export TARGET_SOC=s5e8835
-export PLATFORM_VERSION=14
-export ANDROID_MAJOR_VERSION=u
-
-# مسح أي Werror من ملف Makefile الرئيسي فقط بأمان شديد
-sed -i 's/-Werror//g' Makefile 2>/dev/null || true
-sed -i '/REAL_CC/d; /CFP_CC/d; /wrapper/d' Makefile 2>/dev/null || true
+export PLATFORM_VERSION=13
+export ANDROID_MAJOR_VERSION=t
+export DTC_FLAGS="-@"
+export LLVM=1
+export LLVM_IAS=1
+# ----------------------------------------------
 
 DEFCONFIG="s5e8835-a35xjvxx_defconfig"
-make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- $DEFCONFIG
+make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- $DEFCONFIG
 
 if [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
     cp "arch/arm64/configs/$DEFCONFIG" "arch/arm64/configs/stock_defconfig"
 fi
 
-echo -e "${GREEN}=== المرحلة 6: تخصيص النواة (اختياري) ===${NC}"
-if [[ "$MENU_CHOICE_ENV" == "y" || "$MENU_CHOICE_ENV" == "Y" ]]; then
-    if [ ! -t 0 ]; then
-        warn "تخطي menuconfig في بيئة CI."
-    else
-        make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- menuconfig
-    fi
-fi
-
-echo -e "${GREEN}=== المرحلة 7: تعطيل حماية سامسونج وتفعيل KSU ===${NC}"
-
+echo -e "${GREEN}=== المرحلة 6: تعطيل حماية سامسونج وتفعيل KSU ===${NC}"
 if [ -f "scripts/config" ]; then
     scripts/config --file ".config" -d CONFIG_UH -d CONFIG_UH_RKP -d CONFIG_RKP_CFP \
         -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE -d CONFIG_SECURITY_DSMS \
         -d CONFIG_KNOX_KAP -d CONFIG_SAMSUNG_FREECESS -d CONFIG_MODULE_SIG_FORCE \
-        -d CONFIG_WERROR
-    
-    # تعطيل تقنية LTO لأنها بتدمر تعريفات كاميرا سامسونج
-    scripts/config --file ".config" -d CONFIG_LTO_CLANG_THIN -d CONFIG_LTO_CLANG_FULL -e CONFIG_LTO_NONE
+        -d CONFIG_LTO_CLANG_THIN -d CONFIG_LTO_CLANG_FULL -e CONFIG_LTO_NONE
     
     scripts/config --file ".config" -e CONFIG_KPROBES -e CONFIG_HAVE_KPROBES -e CONFIG_KPROBE_EVENTS -e CONFIG_KSU
 else
@@ -172,23 +137,23 @@ else
 fi
 
 log "جاري حفظ إعدادات النواة (olddefconfig)..."
-make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- olddefconfig
+make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- olddefconfig
 
 if [ -d "$PWD/patches" ]; then
-    echo -e "${GREEN}=== المرحلة 8: تطبيق الباتشات الإضافية ===${NC}"
+    echo -e "${GREEN}=== المرحلة 7: تطبيق الباتشات الإضافية ===${NC}"
     for patch in patches/*.patch; do
         [ -f "$patch" ] && git apply "$patch" || true
     done
 fi
 
-echo -e "${GREEN}=== المرحلة 9: ترجمة النواة ===${NC}"
-# استخدام -Wno-error بطريقة آمنة لتجاهل أخطاء سامسونج بدون تخريب الأكواد
-make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-Wno-error -w" Image
+echo -e "${GREEN}=== المرحلة 8: ترجمة النواة ===${NC}"
+# استخدام LLVM=1 لضمان بيئة بناء نظيفة كما حددتها سامسونج
+make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-none-linux-gnu- Image
 
 if [ ! -f "arch/arm64/boot/Image" ]; then error "فشل التجميع، لم يتم العثور على Image."; fi
 mkdir -p "$BUILD_DIR" && cp arch/arm64/boot/Image "$BUILD_DIR/"
 
-echo -e "${GREEN}=== المرحلة 10: تحضير boot.img ===${NC}"
+echo -e "${GREEN}=== المرحلة 9: تحضير boot.img ===${NC}"
 mkdir -p "$KERNEL_ROOT/stock_boot"
 if [[ "$BOOT_URL" == *drive.google.com* ]]; then
     download_google_drive "$BOOT_URL" "$KERNEL_ROOT/stock_boot/boot.img"
@@ -213,7 +178,7 @@ cp "$BUILD_DIR/Image" kernel
 magiskboot repack boot.img
 mv new-boot.img "$BUILD_DIR/boot.img"
 
-echo -e "${GREEN}=== المرحلة 11: إنشاء AnyKernel3.zip ===${NC}"
+echo -e "${GREEN}=== المرحلة 10: إنشاء AnyKernel3.zip ===${NC}"
 if [[ "$AK3_CHOICE_ENV" == "y" || "$AK3_CHOICE_ENV" == "Y" ]]; then
     cd "$KERNEL_ROOT"
     if [ ! -d "AnyKernel3" ]; then
