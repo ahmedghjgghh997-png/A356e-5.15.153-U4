@@ -1,4 +1,4 @@
-name: Build Kernel (Exynos) - Auto Source + boot.img
+name: Build Kernel (Exynos) - Auto Source + boot.img + AnyKernel3
 
 on:
   workflow_dispatch:
@@ -21,7 +21,7 @@ jobs:
       - name: Checkout Repository (scripts & configs)
         uses: actions/checkout@v4
 
-      # ========== قراءة الروابط الافتراضية من الملفات ==========
+      # قراءة الروابط الافتراضية
       - name: Read default kernel source URL from file
         id: read_kernel_url
         run: |
@@ -42,7 +42,6 @@ jobs:
             echo "default_boot_url=" >> $GITHUB_OUTPUT
           fi
 
-      # ========== تحديد الرابط الفعلي للسورس ==========
       - name: Set effective kernel source URL
         id: set_kernel_url
         run: |
@@ -58,7 +57,6 @@ jobs:
             fi
           fi
 
-      # ========== تحديد الرابط الفعلي للـ boot ==========
       - name: Set effective boot URL
         id: set_boot_url
         run: |
@@ -74,7 +72,6 @@ jobs:
             fi
           fi
 
-      # ========== تثبيت البيئة الأساسية (clang-18, lld-18, libyaml-dev) ==========
       - name: Setup Build Environment
         run: |
           sudo apt update
@@ -83,10 +80,14 @@ jobs:
             libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev \
             libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
             zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
-            unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev
+            unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev \
+            cpio tofrodos python3-markdown libgl1-mesa-dev libx11-dev libreadline-dev
+          # libtinfo5 for older toolchains (optional)
+          wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
+          sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
           pip install gdown
 
-      # ========== 1. تحميل سورس النواة (يدعم Samsung Kernel.tar.gz) ==========
+      # ========== 1. تحميل سورس النواة ==========
       - name: Download and Extract Kernel Source
         id: download_source
         if: steps.set_kernel_url.outputs.effective_url != ''
@@ -128,9 +129,7 @@ jobs:
           fi
           if [ -f kernel-source/Kernel.tar.gz ]; then
             echo "Detected Kernel.tar.gz from Samsung source, extracting..."
-            cd kernel-source
-            tar -xvf Kernel.tar.gz && rm Kernel.tar.gz
-            cd ..
+            cd kernel-source && tar -xvf Kernel.tar.gz && rm Kernel.tar.gz && cd ..
           fi
           echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
 
@@ -146,32 +145,21 @@ jobs:
             exit 1
           fi
 
-      # ========== 2. تحميل boot.img (دعم كامل لـ Google Drive) ==========
+      # ========== 2. تحميل boot.img ==========
       - name: Download boot.img from URL
         id: download_boot
         if: steps.set_boot_url.outputs.effective_boot_url != ''
         run: |
           BOOT_URL="${{ steps.set_boot_url.outputs.effective_boot_url }}"
           mkdir -p kernel-source/stock_boot
-          echo "Downloading boot.img from: $BOOT_URL"
           if [[ "$BOOT_URL" == *google.com* ]]; then
             FILE_ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
             [ -z "$FILE_ID" ] && FILE_ID=$(echo "$BOOT_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
-            if [ -z "$FILE_ID" ]; then
-              echo "ERROR: Could not extract Google Drive file ID"
-              exit 1
-            fi
-            echo "Using gdown with ID: $FILE_ID"
             gdown "https://drive.google.com/uc?id=${FILE_ID}" -O kernel-source/stock_boot/boot.img
           else
             curl -L -o kernel-source/stock_boot/boot.img "$BOOT_URL"
           fi
-          if [ ! -f "kernel-source/stock_boot/boot.img" ]; then
-            echo "ERROR: Failed to download boot.img"
-            exit 1
-          fi
           if file kernel-source/stock_boot/boot.img | grep -q "HTML"; then
-            echo "ERROR: HTML page. Use direct link or place file in boot-stock/"
             rm kernel-source/stock_boot/boot.img
             exit 1
           fi
@@ -185,9 +173,6 @@ jobs:
           if [ -f "boot-stock/boot.img" ]; then
             mkdir -p kernel-source/stock_boot
             cp boot-stock/boot.img kernel-source/stock_boot/
-            echo "Using local boot.img from boot-stock/"
-          else
-            echo "WARNING: No boot.img found. Only Image will be built."
           fi
 
       # ========== 3. نسخ السكريبت والملفات المساعدة ==========
@@ -222,10 +207,15 @@ jobs:
         run: |
           cd kernel-source/build
           tar -cvf Custom-Kernel.tar boot.img
-
       - name: Upload Odin tar
         if: hashFiles('kernel-source/build/Custom-Kernel.tar') != ''
         uses: actions/upload-artifact@v4
         with:
           name: odin-tar
           path: kernel-source/build/Custom-Kernel.tar
+
+      - name: Upload AnyKernel3 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: anykernel3-zip
+          path: kernel-source/build/AnyKernel3-*.zip
