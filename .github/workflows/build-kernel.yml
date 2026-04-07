@@ -16,7 +16,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository (scripts & configs)
         uses: actions/checkout@v4
@@ -96,7 +96,6 @@ jobs:
           echo "Downloading from: $SOURCE_URL"
           mkdir -p kernel-source
 
-          # التحقق مما إذا كان الرابط من Google Drive
           if [[ "$SOURCE_URL" == *drive.google.com* ]] || [[ "$SOURCE_URL" == *docs.google.com* ]] || [[ "$SOURCE_URL" == *drive.usercontent.google.com* ]]; then
             echo "Google Drive link detected. Using gdown..."
             FILE_ID=$(echo "$SOURCE_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
@@ -113,7 +112,6 @@ jobs:
             curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o kernel-source.download "$SOURCE_URL"
           fi
 
-          # تحديد نوع الملف
           FILE_TYPE=$(file -b --mime-type kernel-source.download)
           echo "Detected MIME type: $FILE_TYPE"
 
@@ -134,11 +132,10 @@ jobs:
               tar -xf kernel-source.tar -C kernel-source --strip-components=1
               ;;
             text/html)
-              echo "ERROR: Downloaded file is HTML (not a direct link). Please provide a direct download URL or use Google Drive."
+              echo "ERROR: Downloaded file is HTML (not a direct link)."
               exit 1
               ;;
             *)
-              # إذا كان ملف عادي (غير مضغوط) نعتبره مجلد source صالح
               mkdir -p kernel-source-temp
               mv kernel-source.download kernel-source-temp/
               if [ -f "kernel-source-temp/Makefile" ] || [ -d "kernel-source-temp/arch" ]; then
@@ -173,7 +170,6 @@ jobs:
           BOOT_URL="${{ steps.set_boot_url.outputs.effective_boot_url }}"
           mkdir -p kernel-source/stock_boot
           
-          # التحقق مما إذا كان الرابط من Google Drive
           if [[ "$BOOT_URL" == *drive.google.com* ]] || [[ "$BOOT_URL" == *docs.google.com* ]] || [[ "$BOOT_URL" == *drive.usercontent.google.com* ]]; then
             echo "Google Drive link detected. Using gdown..."
             FILE_ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
@@ -190,9 +186,8 @@ jobs:
             curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o kernel-source/stock_boot/boot.img "$BOOT_URL"
           fi
           
-          # التحقق من أن الملف ليس HTML
           if file kernel-source/stock_boot/boot.img | grep -q "HTML"; then
-            echo "ERROR: Downloaded boot.img is HTML page. Please provide a direct download URL or use Google Drive."
+            echo "ERROR: Downloaded boot.img is HTML page."
             rm kernel-source/stock_boot/boot.img
             exit 1
           fi
