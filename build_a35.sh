@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380)
-# مع KernelSU + تفعيل KPROBES + Clang 18
+# مع KernelSU + تفعيل KPROBES + Clang 18 + LD.lld-18
 # ============================================================
 
 export ARCH=arm64
@@ -12,8 +12,9 @@ export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=14
 export ANDROID_MAJOR_VERSION=u
 
-# استخدام Clang 18 المثبت في النظام (بدلاً من Neutron-Clang)
+# تحديد Clang و الرابط بشكل صريح
 export CC=clang-18
+export LD=ld.lld-18
 export CROSS_COMPILE=aarch64-linux-gnu-
 export CLANG_TRIPLE=aarch64-linux-gnu-
 
@@ -22,6 +23,7 @@ export BUILD_OPTIONS=(
     -j$(nproc)
     ARCH=arm64
     CC=${CC}
+    LD=${LD}
     CROSS_COMPILE=${CROSS_COMPILE}
     CLANG_TRIPLE=${CLANG_TRIPLE}
     LLVM=1
