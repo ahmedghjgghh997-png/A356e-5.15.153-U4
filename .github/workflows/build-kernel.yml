@@ -1,0 +1,136 @@
+name: Build Kernel (Exynos) - Auto Source + boot.img
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_source_url:
+        description: 'رابط سورس النواة (ZIP, TAR.GZ, TAR.XZ, أو repo .git) - اتركه فارغاً لاستخدام السورس الموجود في مجلد kernel/ بالمستودع'
+        required: false
+        default: ''
+        type: string
+      boot_direct_url:
+        description: 'رابط مباشر لـ boot.img - اتركه فارغاً لاستخدام الملف من boot-stock/boot.img'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Repository (scripts & configs)
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison build-essential ccache curl device-tree-compiler \
+            flex g++-multilib gcc-multilib git gnupg gperf imagemagick libc6-dev-i386 \
+            libelf-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev \
+            libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
+            zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils android-sdk-libsparse-utils \
+            unzip xz-utils
+          mkdir -p $HOME/toolchains
+
+      # ========== 1. الحصول على سورس النواة ==========
+      # الحالة الأولى: تحميل من رابط خارجي
+      - name: Download Kernel Source from URL
+        id: download_source
+        if: github.event.inputs.kernel_source_url != ''
+        run: |
+          SOURCE_URL="${{ github.event.inputs.kernel_source_url }}"
+          echo "Downloading kernel source from: $SOURCE_URL"
+          mkdir -p kernel-source
+          if [[ "$SOURCE_URL" == *.git ]]; then
+            git clone --depth=1 "$SOURCE_URL" kernel-source
+          elif [[ "$SOURCE_URL" == *.tar.gz ]]; then
+            wget -O kernel-source.tar.gz "$SOURCE_URL"
+            tar -xzf kernel-source.tar.gz -C kernel-source --strip-components=1
+          elif [[ "$SOURCE_URL" == *.tar.xz ]]; then
+            wget -O kernel-source.tar.xz "$SOURCE_URL"
+            tar -xJf kernel-source.tar.xz -C kernel-source --strip-components=1
+          else
+            wget -O kernel-source.zip "$SOURCE_URL"
+            unzip -q kernel-source.zip -d kernel-source
+          fi
+          echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
+          ls -la kernel-source/
+
+      # الحالة الثانية: استخدام السورس الموجود في مجلد kernel/ بالمستودع (fallback)
+      - name: Use kernel source from repo folder 'kernel/'
+        if: github.event.inputs.kernel_source_url == ''
+        run: |
+          if [ -d "kernel" ]; then
+            mkdir -p kernel-source
+            rsync -av ./kernel/ kernel-source/
+            echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
+            echo "Using kernel source from repo folder 'kernel/'"
+          else
+            echo "ERROR: No kernel source URL provided and no 'kernel/' folder found in repository."
+            exit 1
+          fi
+
+      # ========== 2. الحصول على boot.img ==========
+      - name: Download boot.img from direct URL
+        id: try_url
+        if: github.event.inputs.boot_direct_url != ''
+        run: |
+          mkdir -p kernel-source/stock_boot
+          if wget -O kernel-source/stock_boot/boot.img "${{ github.event.inputs.boot_direct_url }}"; then
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "success=false" >> $GITHUB_OUTPUT
+            rm -f kernel-source/stock_boot/boot.img
+          fi
+
+      - name: Use boot.img from repository (fallback)
+        if: |
+          github.event.inputs.boot_direct_url == '' ||
+          (github.event.inputs.boot_direct_url != '' && steps.try_url.outputs.success == 'false')
+        run: |
+          if [ -f "boot-stock/boot.img" ]; then
+            mkdir -p kernel-source/stock_boot
+            cp boot-stock/boot.img kernel-source/stock_boot/
+            echo "Using boot.img from repository (boot-stock/boot.img)"
+          else
+            echo "No boot.img found. Kernel Image will be built only."
+          fi
+
+      # ========== 3. نسخ سكريبت البناء والملفات المساعدة ==========
+      - name: Copy build script and patches to kernel source
+        run: |
+          cp build_a35.sh kernel-source/
+          cp custom.config kernel-source/ 2>/dev/null || true
+          cp -r patches kernel-source/ 2>/dev/null || true
+          chmod +x kernel-source/build_a35.sh
+
+      # ========== 4. بناء النواة ==========
+      - name: Build Kernel
+        run: |
+          cd kernel-source
+          ./build_a35.sh
+
+      # ========== 5. رفع المخرجات ==========
+      - name: Upload Kernel Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image
+          path: kernel-source/build/Image
+
+      - name: Upload Boot Image (if exists)
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-image
+          path: kernel-source/build/boot.img
+
+      - name: Create Odin tar (if boot.img exists)
+        if: hashFiles('kernel-source/build/boot.img') != ''
+        run: |
+          cd kernel-source/build
+          tar -cvf Custom-Kernel.tar boot.img
+      - name: Upload Odin tar
+        if: hashFiles('kernel-source/build/Custom-Kernel.tar') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: odin-tar
+          path: kernel-source/build/Custom-Kernel.tar
