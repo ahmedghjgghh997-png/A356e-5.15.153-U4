@@ -152,6 +152,7 @@ build_kernel() {
     fi
 
     disable_samsung_security
+    scripts/config --file ".config" --disable CONFIG_DEBUG_INFO_BTF
 
     echo "[INFO] بدء تجميع النواة..."
     make "${BUILD_OPTIONS[@]}" Image 2>&1 | tee build.log
