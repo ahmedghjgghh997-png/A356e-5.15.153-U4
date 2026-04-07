@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380) - الإصدار النهائي
-# مع أحدث الأدوات: Clang 22.1.0 + GCC 15.2 + Binutils 2.46
+# سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380)
+# باستخدام clang-18 و lld-18 من Ubuntu 24.04
 # ============================================================
 
 export ARCH=arm64
@@ -12,9 +12,9 @@ export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=14
 export ANDROID_MAJOR_VERSION=u
 
-# تحديد المسارات للأدوات المثبتة مسبقاً في GitHub Actions
-export PATH="/usr/local/llvm/bin:/usr/local/gcc-arm/bin:/usr/local/binutils/bin:$PATH"
-export CC=clang
+# استخدام clang-18 و lld-18 المثبتين في النظام
+export CC=clang-18
+export LD=ld.lld-18
 export CROSS_COMPILE=aarch64-linux-gnu-
 export CLANG_TRIPLE=aarch64-linux-gnu-
 
@@ -23,6 +23,7 @@ export BUILD_OPTIONS=(
     -j$(nproc)
     ARCH=arm64
     CC=${CC}
+    LD=${LD}
     CROSS_COMPILE=${CROSS_COMPILE}
     CLANG_TRIPLE=${CLANG_TRIPLE}
     LLVM=1
