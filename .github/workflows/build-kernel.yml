@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       kernel_source_url:
-        description: 'رابط سورس النواة (ZIP, TAR.GZ, TAR.XZ, أو repo .git) - اتركه فارغاً لاستخدام السورس الموجود في مجلد kernel/ بالمستودع'
+        description: 'رابط سورس النواة (ZIP, TAR.GZ, TAR.XZ, أو repo .git) - اتركه فارغاً لاستخدام السورس الموجود في مجلد kernel/ أو ملف kernel_source_url.txt'
         required: false
         default: ''
         type: string
       boot_direct_url:
-        description: 'رابط مباشر لـ boot.img - اتركه فارغاً لاستخدام الملف من boot-stock/boot.img'
+        description: 'رابط مباشر لـ boot.img - اتركه فارغاً لاستخدام الملف من boot-stock/boot.img أو ملف boot_url.txt'
         required: false
         default: ''
         type: string
@@ -20,6 +20,66 @@ jobs:
     steps:
       - name: Checkout Repository (scripts & configs)
         uses: actions/checkout@v4
+
+      # ========== قراءة الرابط الافتراضي لسورس النواة من ملف (إن وجد) ==========
+      - name: Read default kernel source URL from file
+        id: read_kernel_url
+        run: |
+          if [ -f "kernel_source_url.txt" ]; then
+            DEFAULT_URL=$(cat kernel_source_url.txt | head -1)
+            echo "default_url=$DEFAULT_URL" >> $GITHUB_OUTPUT
+            echo "Found default kernel source URL in kernel_source_url.txt"
+          else
+            echo "default_url=" >> $GITHUB_OUTPUT
+          fi
+
+      # ========== قراءة الرابط الافتراضي لـ boot.img من ملف (إن وجد) ==========
+      - name: Read default boot URL from file
+        id: read_boot_url
+        run: |
+          if [ -f "boot_url.txt" ]; then
+            DEFAULT_BOOT_URL=$(cat boot_url.txt | head -1)
+            echo "default_boot_url=$DEFAULT_BOOT_URL" >> $GITHUB_OUTPUT
+            echo "Found default boot URL in boot_url.txt"
+          else
+            echo "default_boot_url=" >> $GITHUB_OUTPUT
+          fi
+
+      # ========== تحديد رابط السورس الفعلي (المدخل أو الافتراضي) ==========
+      - name: Set effective kernel source URL
+        id: set_kernel_url
+        run: |
+          INPUT_URL="${{ github.event.inputs.kernel_source_url }}"
+          if [ -n "$INPUT_URL" ]; then
+            echo "effective_url=$INPUT_URL" >> $GITHUB_OUTPUT
+            echo "Using input kernel URL"
+          else
+            DEFAULT_URL="${{ steps.read_kernel_url.outputs.default_url }}"
+            if [ -n "$DEFAULT_URL" ]; then
+              echo "effective_url=$DEFAULT_URL" >> $GITHUB_OUTPUT
+              echo "Using default kernel URL from file"
+            else
+              echo "effective_url=" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      # ========== تحديد رابط boot.img الفعلي (المدخل أو الافتراضي) ==========
+      - name: Set effective boot URL
+        id: set_boot_url
+        run: |
+          INPUT_BOOT="${{ github.event.inputs.boot_direct_url }}"
+          if [ -n "$INPUT_BOOT" ]; then
+            echo "effective_boot_url=$INPUT_BOOT" >> $GITHUB_OUTPUT
+            echo "Using input boot URL"
+          else
+            DEFAULT_BOOT="${{ steps.read_boot_url.outputs.default_boot_url }}"
+            if [ -n "$DEFAULT_BOOT" ]; then
+              echo "effective_boot_url=$DEFAULT_BOOT" >> $GITHUB_OUTPUT
+              echo "Using default boot URL from file"
+            else
+              echo "effective_boot_url=" >> $GITHUB_OUTPUT
+            fi
+          fi
 
       - name: Setup Build Environment
         run: |
@@ -33,12 +93,11 @@ jobs:
           mkdir -p $HOME/toolchains
 
       # ========== 1. الحصول على سورس النواة ==========
-      # الحالة الأولى: تحميل من رابط خارجي
       - name: Download Kernel Source from URL
         id: download_source
-        if: github.event.inputs.kernel_source_url != ''
+        if: steps.set_kernel_url.outputs.effective_url != ''
         run: |
-          SOURCE_URL="${{ github.event.inputs.kernel_source_url }}"
+          SOURCE_URL="${{ steps.set_kernel_url.outputs.effective_url }}"
           echo "Downloading kernel source from: $SOURCE_URL"
           mkdir -p kernel-source
           if [[ "$SOURCE_URL" == *.git ]]; then
@@ -56,9 +115,8 @@ jobs:
           echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
           ls -la kernel-source/
 
-      # الحالة الثانية: استخدام السورس الموجود في مجلد kernel/ بالمستودع (fallback)
       - name: Use kernel source from repo folder 'kernel/'
-        if: github.event.inputs.kernel_source_url == ''
+        if: steps.set_kernel_url.outputs.effective_url == ''
         run: |
           if [ -d "kernel" ]; then
             mkdir -p kernel-source
@@ -66,17 +124,17 @@ jobs:
             echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
             echo "Using kernel source from repo folder 'kernel/'"
           else
-            echo "ERROR: No kernel source URL provided and no 'kernel/' folder found in repository."
+            echo "ERROR: No kernel source URL provided and no 'kernel/' folder found."
             exit 1
           fi
 
       # ========== 2. الحصول على boot.img ==========
-      - name: Download boot.img from direct URL
+      - name: Download boot.img from effective URL
         id: try_url
-        if: github.event.inputs.boot_direct_url != ''
+        if: steps.set_boot_url.outputs.effective_boot_url != ''
         run: |
           mkdir -p kernel-source/stock_boot
-          if wget -O kernel-source/stock_boot/boot.img "${{ github.event.inputs.boot_direct_url }}"; then
+          if wget -O kernel-source/stock_boot/boot.img "${{ steps.set_boot_url.outputs.effective_boot_url }}"; then
             echo "success=true" >> $GITHUB_OUTPUT
           else
             echo "success=false" >> $GITHUB_OUTPUT
@@ -85,8 +143,8 @@ jobs:
 
       - name: Use boot.img from repository (fallback)
         if: |
-          github.event.inputs.boot_direct_url == '' ||
-          (github.event.inputs.boot_direct_url != '' && steps.try_url.outputs.success == 'false')
+          steps.set_boot_url.outputs.effective_boot_url == '' ||
+          (steps.set_boot_url.outputs.effective_boot_url != '' && steps.try_url.outputs.success == 'false')
         run: |
           if [ -f "boot-stock/boot.img" ]; then
             mkdir -p kernel-source/stock_boot
