@@ -21,7 +21,7 @@ jobs:
       - name: Checkout Repository (scripts & configs)
         uses: actions/checkout@v4
 
-      # ========== قراءة الروابط الافتراضية من الملفات ==========
+      # ========== قراءة الروابط الافتراضية ==========
       - name: Read default kernel source URL from file
         id: read_kernel_url
         run: |
@@ -42,7 +42,6 @@ jobs:
             echo "default_boot_url=" >> $GITHUB_OUTPUT
           fi
 
-      # ========== تحديد الرابط الفعلي للسورس ==========
       - name: Set effective kernel source URL
         id: set_kernel_url
         run: |
@@ -58,7 +57,6 @@ jobs:
             fi
           fi
 
-      # ========== تحديد الرابط الفعلي للـ boot ==========
       - name: Set effective boot URL
         id: set_boot_url
         run: |
@@ -74,7 +72,7 @@ jobs:
             fi
           fi
 
-      # ========== تثبيت الأدوات الأساسية (متوافق مع Ubuntu 24.04) ==========
+      # ========== تثبيت بيئة البناء والأدوات الحديثة ==========
       - name: Setup Build Environment
         run: |
           sudo apt update
@@ -82,12 +80,36 @@ jobs:
             flex g++-multilib gcc-multilib git gnupg gperf imagemagick libc6-dev-i386 \
             libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev \
             libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
-            zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils android-sdk-libsparse-utils \
-            unzip xz-utils python3-pip
+            zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
+            unzip xz-utils python3-pip wget tar
           mkdir -p $HOME/toolchains
           pip install gdown
 
-      # ========== 1. تحميل وفك ضغط سورس النواة ==========
+      - name: Install Clang/LLVM 22.1.0
+        run: |
+          wget https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/clang+llvm-22.1.0-x86_64-linux-gnu-ubuntu-24.04.tar.xz
+          tar -xf clang+llvm-22.1.0-x86_64-linux-gnu-ubuntu-24.04.tar.xz
+          sudo mv clang+llvm-22.1.0-x86_64-linux-gnu-ubuntu-24.04 /usr/local/llvm
+          echo "/usr/local/llvm/bin" >> $GITHUB_PATH
+
+      - name: Install GNU Arm Embedded Toolchain 15.2
+        run: |
+          wget https://developer.arm.com/-/media/Files/downloads/gnu/15.2.rel1/binrel/arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi.tar.xz
+          tar -xf arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi.tar.xz
+          sudo mv arm-gnu-toolchain-15.2.rel1-x86_64-arm-none-eabi /usr/local/gcc-arm
+          echo "/usr/local/gcc-arm/bin" >> $GITHUB_PATH
+
+      - name: Install GNU Binutils 2.46
+        run: |
+          wget https://ftp.gnu.org/gnu/binutils/binutils-2.46.tar.xz
+          tar -xf binutils-2.46.tar.xz
+          cd binutils-2.46
+          ./configure --prefix=/usr/local/binutils --disable-gdb --disable-gdbserver --disable-sim
+          make -j$(nproc)
+          sudo make install
+          echo "/usr/local/binutils/bin" >> $GITHUB_PATH
+
+      # ========== تحميل السورس ==========
       - name: Download and Extract Kernel Source
         id: download_source
         if: steps.set_kernel_url.outputs.effective_url != ''
@@ -95,60 +117,23 @@ jobs:
           SOURCE_URL="${{ steps.set_kernel_url.outputs.effective_url }}"
           echo "Downloading from: $SOURCE_URL"
           mkdir -p kernel-source
-
           if [[ "$SOURCE_URL" == *drive.google.com* ]] || [[ "$SOURCE_URL" == *docs.google.com* ]] || [[ "$SOURCE_URL" == *drive.usercontent.google.com* ]]; then
-            echo "Google Drive link detected. Using gdown..."
             FILE_ID=$(echo "$SOURCE_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
-            if [ -z "$FILE_ID" ]; then
-              FILE_ID=$(echo "$SOURCE_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
-            fi
-            if [ -z "$FILE_ID" ]; then
-              echo "ERROR: Could not extract Google Drive file ID from URL"
-              exit 1
-            fi
-            echo "File ID: $FILE_ID"
+            [ -z "$FILE_ID" ] && FILE_ID=$(echo "$SOURCE_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
             gdown "https://drive.google.com/uc?id=${FILE_ID}" -O kernel-source.download
           else
-            curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o kernel-source.download "$SOURCE_URL"
+            curl -L -A "Mozilla/5.0" -o kernel-source.download "$SOURCE_URL"
           fi
-
           FILE_TYPE=$(file -b --mime-type kernel-source.download)
-          echo "Detected MIME type: $FILE_TYPE"
-
           case "$FILE_TYPE" in
-            application/zip)
-              unzip -q kernel-source.download -d kernel-source
-              ;;
-            application/gzip|application/x-gzip)
-              mv kernel-source.download kernel-source.tar.gz
-              tar -xzf kernel-source.tar.gz -C kernel-source --strip-components=1
-              ;;
-            application/x-xz)
-              mv kernel-source.download kernel-source.tar.xz
-              tar -xJf kernel-source.tar.xz -C kernel-source --strip-components=1
-              ;;
-            application/x-tar)
-              mv kernel-source.download kernel-source.tar
-              tar -xf kernel-source.tar -C kernel-source --strip-components=1
-              ;;
-            text/html)
-              echo "ERROR: Downloaded file is HTML (not a direct link)."
-              exit 1
-              ;;
-            *)
-              mkdir -p kernel-source-temp
-              mv kernel-source.download kernel-source-temp/
-              if [ -f "kernel-source-temp/Makefile" ] || [ -d "kernel-source-temp/arch" ]; then
-                mv kernel-source-temp/* kernel-source/
-              else
-                echo "ERROR: Unknown file format or not a valid kernel source."
-                exit 1
-              fi
-              ;;
+            application/zip) unzip -q kernel-source.download -d kernel-source ;;
+            application/gzip|application/x-gzip) mv kernel-source.download kernel-source.tar.gz && tar -xzf kernel-source.tar.gz -C kernel-source --strip-components=1 ;;
+            application/x-xz) mv kernel-source.download kernel-source.tar.xz && tar -xJf kernel-source.tar.xz -C kernel-source --strip-components=1 ;;
+            application/x-tar) mv kernel-source.download kernel-source.tar && tar -xf kernel-source.tar -C kernel-source --strip-components=1 ;;
+            text/html) echo "ERROR: HTML page received"; exit 1 ;;
+            *) mkdir -p kernel-source-temp && mv kernel-source.download kernel-source-temp/ && if [ -f kernel-source-temp/Makefile ]; then mv kernel-source-temp/* kernel-source/; else exit 1; fi ;;
           esac
-
           echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
-          ls -la kernel-source/
 
       - name: Use kernel source from repo folder 'kernel/'
         if: steps.set_kernel_url.outputs.effective_url == ''
@@ -158,36 +143,24 @@ jobs:
             rsync -av ./kernel/ kernel-source/
             echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
           else
-            echo "ERROR: No kernel source URL provided and no 'kernel/' folder found."
+            echo "ERROR: No kernel source provided."
             exit 1
           fi
 
-      # ========== 2. الحصول على boot.img ==========
+      # ========== تحميل boot.img ==========
       - name: Download boot.img from URL
         id: download_boot
         if: steps.set_boot_url.outputs.effective_boot_url != ''
         run: |
           BOOT_URL="${{ steps.set_boot_url.outputs.effective_boot_url }}"
           mkdir -p kernel-source/stock_boot
-          
-          if [[ "$BOOT_URL" == *drive.google.com* ]] || [[ "$BOOT_URL" == *docs.google.com* ]] || [[ "$BOOT_URL" == *drive.usercontent.google.com* ]]; then
-            echo "Google Drive link detected. Using gdown..."
-            FILE_ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
-            if [ -z "$FILE_ID" ]; then
-              FILE_ID=$(echo "$BOOT_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
-            fi
-            if [ -z "$FILE_ID" ]; then
-              echo "ERROR: Could not extract Google Drive file ID from URL"
-              exit 1
-            fi
-            echo "File ID: $FILE_ID"
+          if [[ "$BOOT_URL" == *drive.google.com* ]] || [[ "$BOOT_URL" == *docs.google.com* ]]; then
+            FILE_ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+')
             gdown "https://drive.google.com/uc?id=${FILE_ID}" -O kernel-source/stock_boot/boot.img
           else
-            curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o kernel-source/stock_boot/boot.img "$BOOT_URL"
+            curl -L -o kernel-source/stock_boot/boot.img "$BOOT_URL"
           fi
-          
           if file kernel-source/stock_boot/boot.img | grep -q "HTML"; then
-            echo "ERROR: Downloaded boot.img is HTML page."
             rm kernel-source/stock_boot/boot.img
             exit 1
           fi
@@ -201,11 +174,9 @@ jobs:
           if [ -f "boot-stock/boot.img" ]; then
             mkdir -p kernel-source/stock_boot
             cp boot-stock/boot.img kernel-source/stock_boot/
-          else
-            echo "No boot.img found. Kernel Image will be built only."
           fi
 
-      # ========== 3. نسخ سكريبت البناء والملفات المساعدة ==========
+      # ========== نسخ السكريبت والملفات المساعدة ==========
       - name: Copy build script and patches to kernel source
         run: |
           cp build_a35.sh kernel-source/
@@ -213,26 +184,26 @@ jobs:
           cp -r patches kernel-source/ 2>/dev/null || true
           chmod +x kernel-source/build_a35.sh
 
-      # ========== 4. بناء النواة ==========
+      # ========== بناء النواة ==========
       - name: Build Kernel
         run: |
           cd kernel-source
           ./build_a35.sh
 
-      # ========== 5. رفع المخرجات ==========
+      # ========== رفع المخرجات ==========
       - name: Upload Kernel Image
         uses: actions/upload-artifact@v4
         with:
           name: kernel-image
           path: kernel-source/build/Image
 
-      - name: Upload Boot Image (if exists)
+      - name: Upload Boot Image
         uses: actions/upload-artifact@v4
         with:
           name: boot-image
           path: kernel-source/build/boot.img
 
-      - name: Create Odin tar (if boot.img exists)
+      - name: Create Odin tar
         if: hashFiles('kernel-source/build/boot.img') != ''
         run: |
           cd kernel-source/build
