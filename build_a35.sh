@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380)
-# مع KernelSU + AnyKernel3 + boot.img
+# مع دمج KernelSU-Next + SusFS (مع إمكانية تعطيل SusFS مؤقتًا)
 # ============================================================
 
 export ARCH=arm64
@@ -41,7 +41,6 @@ export BUILD_OPTIONS=(
     NO_YAML=1
 )
 
-# رابط رمزي لـ ld.lld (لضمان وجوده)
 if ! command -v ld.lld &> /dev/null; then
     sudo ln -sf $(which ld.lld-18) /usr/local/bin/ld.lld
     export PATH=/usr/local/bin:$PATH
@@ -67,6 +66,12 @@ prepare_stock_defconfig() {
 
 enable_kprobes() {
     scripts/config --file ".config" -e CONFIG_KPROBES -e CONFIG_HAVE_KPROBES -e CONFIG_KPROBE_EVENTS
+    # تفعيل خيارات SusFS (اختياري)
+    scripts/config --file ".config" -e CONFIG_KSU_SUSFS \
+                                   -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
+                                   -e CONFIG_KSU_SUSFS_SUS_PATH \
+                                   -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
+                                   -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS 2>/dev/null || true
 }
 
 disable_samsung_security() {
@@ -76,7 +81,27 @@ disable_samsung_security() {
 }
 
 add_kernelsu() {
-    [ -d "KernelSU" ] || curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+    if [ ! -d "KernelSU-Next" ]; then
+        echo "[INFO] دمج KernelSU-Next (فرع next-susfs)..."
+        curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next-susfs/kernel/setup.sh" | bash -
+    else
+        echo "[INFO] KernelSU-Next موجود مسبقًا"
+    fi
+}
+
+# تعطيل تطبيق SusFS مؤقتًا إذا تسبب في مشاكل
+APPLY_SUSFS=${APPLY_SUSFS:-false}  # غيّر إلى true إذا أردت تفعيله
+apply_susfs() {
+    if [ "$APPLY_SUSFS" = "true" ] && [ ! -d "susfs4ksu" ]; then
+        echo "[INFO] تطبيق تصحيحات SusFS..."
+        git clone https://gitlab.com/simonpunk/susfs4ksu.git
+        cd KernelSU-Next
+        for patch in ../susfs4ksu/kernel_patches/*.patch; do
+            echo "تطبيق: $(basename $patch)"
+            patch -p1 < "$patch" || echo "فشل (قد يكون مطبقًا)"
+        done
+        cd ..
+    fi
 }
 
 merge_custom_config() {
@@ -96,7 +121,7 @@ create_anykernel3_zip() {
 }
 
 build_kernel() {
-    echo "[INFO] Building defconfig: s5e8835-a35xjvxx_defconfig"
+    echo "[INFO] استخدام defconfig: s5e8835-a35xjvxx_defconfig"
     make "${BUILD_OPTIONS[@]}" s5e8835-a35xjvxx_defconfig
 
     prepare_stock_defconfig
@@ -105,23 +130,38 @@ build_kernel() {
     apply_patches
     enable_kprobes
     add_kernelsu
+    apply_susfs   # يمكن تعطيله بتغيير APPLY_SUSFS=false
 
-    # تعطيل BTF لتجنب أخطاء resolve_btfids
+    # تعطيل BTF
     scripts/config --file ".config" --disable CONFIG_DEBUG_INFO_BTF --disable CONFIG_DEBUG_INFO
     make "${BUILD_OPTIONS[@]}" olddefconfig
 
-    echo "[INFO] Starting kernel compilation..."
+    echo "[INFO] بدء تجميع النواة (قد يستغرق وقتًا)..."
     make "${BUILD_OPTIONS[@]}" Image 2>&1 | tee build.log
-    if [ ! -f "arch/arm64/boot/Image" ]; then
-        echo "[ERROR] Image not found!"
-        tail -30 build.log
+
+    # البحث عن Image
+    IMAGE_FILE=""
+    if [ -f "arch/arm64/boot/Image" ]; then
+        IMAGE_FILE="arch/arm64/boot/Image"
+    elif [ -f "arch/arm64/boot/Image.gz" ]; then
+        IMAGE_FILE="arch/arm64/boot/Image.gz"
+        echo "[INFO] تم العثور على Image.gz بدلاً من Image"
+    elif [ -f "arch/arm64/boot/Image.lz4" ]; then
+        IMAGE_FILE="arch/arm64/boot/Image.lz4"
+        echo "[INFO] تم العثور على Image.lz4 بدلاً من Image"
+    else
+        echo "[ERROR] لم يتم العثور على Image!"
+        echo "محتويات arch/arm64/boot:"
+        ls -la arch/arm64/boot/ 2>/dev/null || echo "المجلد غير موجود"
+        echo "آخر 50 سطرًا من build.log:"
+        tail -50 build.log
         exit 1
     fi
 
     mkdir -p build
-    cp arch/arm64/boot/Image build/
+    cp "$IMAGE_FILE" build/
 
-    # magiskboot لإنشاء boot.img (إذا وُجد boot.img الأصلي)
+    # magiskboot
     if ! command -v magiskboot &> /dev/null; then
         mkdir -p tools/magisk && cd tools/magisk
         wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
@@ -147,8 +187,8 @@ build_kernel() {
     prepare_anykernel3
     create_anykernel3_zip
 
-    echo -e "\n[SUCCESS] Build finished!"
-    echo "Image: build/Image"
+    echo -e "\n[SUCCESS] Build completed!"
+    echo "Image: build/$(basename "$IMAGE_FILE")"
     [ -f "build/boot.img" ] && echo "boot.img: build/boot.img"
     ls build/AnyKernel3-*.zip && echo "AnyKernel3.zip: build/AnyKernel3-*.zip"
 }
