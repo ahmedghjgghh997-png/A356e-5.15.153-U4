@@ -133,6 +133,9 @@ echo -e "${GREEN}=== المرحلة 5: التحضير وتجهيز defconfig ===
 export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=14
 export ANDROID_MAJOR_VERSION=u
+
+# مسح أي Werror من ملف Makefile الرئيسي فقط بأمان شديد
+sed -i 's/-Werror//g' Makefile 2>/dev/null || true
 sed -i '/REAL_CC/d; /CFP_CC/d; /wrapper/d' Makefile 2>/dev/null || true
 
 DEFCONFIG="s5e8835-a35xjvxx_defconfig"
@@ -152,9 +155,6 @@ if [[ "$MENU_CHOICE_ENV" == "y" || "$MENU_CHOICE_ENV" == "Y" ]]; then
 fi
 
 echo -e "${GREEN}=== المرحلة 7: تعطيل حماية سامسونج وتفعيل KSU ===${NC}"
-
-# إجبار الكيرنل على تجاهل كل أخطاء سامسونج
-find . -name "Makefile" -exec sed -i 's/-Werror//g' {} +
 
 if [ -f "scripts/config" ]; then
     scripts/config --file ".config" -d CONFIG_UH -d CONFIG_UH_RKP -d CONFIG_RKP_CFP \
@@ -182,8 +182,8 @@ if [ -d "$PWD/patches" ]; then
 fi
 
 echo -e "${GREEN}=== المرحلة 9: ترجمة النواة ===${NC}"
-# السطر ده اتعدل: ضفنا KCFLAGS="-w" عشان المترجم يخرس خالص ومايطلعش أي Error يوقف البناء
-make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-w" Image
+# استخدام -Wno-error بطريقة آمنة لتجاهل أخطاء سامسونج بدون تخريب الأكواد
+make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-Wno-error -w" Image
 
 if [ ! -f "arch/arm64/boot/Image" ]; then error "فشل التجميع، لم يتم العثور على Image."; fi
 mkdir -p "$BUILD_DIR" && cp arch/arm64/boot/Image "$BUILD_DIR/"
