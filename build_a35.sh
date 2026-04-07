@@ -27,6 +27,7 @@ export BUILD_OPTIONS=(
     CLANG_TRIPLE=${CLANG_TRIPLE}
     LLVM=1
     LLVM_IAS=1
+    V=1        # <--- أضف هذا السطر هنا
 )
 
 remove_gcc_wrapper() {
