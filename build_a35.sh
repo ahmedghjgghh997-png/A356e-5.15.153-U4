@@ -140,7 +140,7 @@ build_kernel() {
     echo "[INFO] تعيين خيارات KernelSU تلقائياً..."
     if [ -f ".config" ]; then
         scripts/config --file ".config" -e CONFIG_KSU -d CONFIG_KSU_DEBUG -d CONFIG_KSU_DISABLE_MANAGER
-        make "${BUILD_OPTIONS[@]}" olddefconfig > /dev/null 2>&1
+        make "${BUILD_OPTIONS[@]}" olddefconfig
     fi
 
     if [ -n "$GITHUB_ACTIONS" ] || [ -n "$CI" ]; then
@@ -153,7 +153,12 @@ build_kernel() {
     disable_samsung_security
 
     echo "[INFO] بدء تجميع النواة..."
-    make "${BUILD_OPTIONS[@]}" Image || { echo "[ERROR] فشل تجميع النواة"; exit 1; }
+    make "${BUILD_OPTIONS[@]}" Image 2>&1 | tee build.log
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        echo "[ERROR] فشل تجميع النواة. آخر 30 سطرًا من السجل:"
+        tail -30 build.log
+        exit 1
+    fi
 
     mkdir -p build
     cp arch/arm64/boot/Image build/
