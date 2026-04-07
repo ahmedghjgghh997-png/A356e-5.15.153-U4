@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       kernel_source_url:
-        description: 'رابط سورس النواة (ZIP, TAR.GZ, TAR.XZ, أو repo .git) - اتركه فارغاً لاستخدام السورس الموجود في مجلد kernel/ بالمستودع'
+        description: 'رابط سورس النواة (ZIP, TAR.GZ, TAR.XZ, أو repo .git أو رابط Google Drive) - اتركه فارغاً لاستخدام السورس الموجود في مجلد kernel/ بالمستودع'
         required: false
         default: ''
         type: string
@@ -82,10 +82,11 @@ jobs:
             libelf-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev \
             libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
             zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils android-sdk-libsparse-utils \
-            unzip xz-utils
+            unzip xz-utils python3-pip
           mkdir -p $HOME/toolchains
+          pip install gdown
 
-      # ========== 1. تحميل وفك ضغط سورس النواة (ذكي) ==========
+      # ========== 1. تحميل وفك ضغط سورس النواة (يدعم Google Drive والروابط العادية) ==========
       - name: Download and Extract Kernel Source
         id: download_source
         if: steps.set_kernel_url.outputs.effective_url != ''
@@ -93,11 +94,30 @@ jobs:
           SOURCE_URL="${{ steps.set_kernel_url.outputs.effective_url }}"
           echo "Downloading from: $SOURCE_URL"
           mkdir -p kernel-source
-          # تحميل الملف مع متابعة إعادة التوجيه
-          curl -L -o kernel-source.download "$SOURCE_URL"
+
+          # التحقق مما إذا كان الرابط من Google Drive
+          if [[ "$SOURCE_URL" == *drive.google.com* ]] || [[ "$SOURCE_URL" == *docs.google.com* ]]; then
+            echo "Google Drive link detected. Using gdown..."
+            # استخراج FILE_ID من الرابط
+            FILE_ID=$(echo "$SOURCE_URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
+            if [ -z "$FILE_ID" ]; then
+              FILE_ID=$(echo "$SOURCE_URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
+            fi
+            if [ -z "$FILE_ID" ]; then
+              echo "ERROR: Could not extract Google Drive file ID from URL"
+              exit 1
+            fi
+            echo "File ID: $FILE_ID"
+            gdown "https://drive.google.com/uc?id=${FILE_ID}" -O kernel-source.download
+          else
+            # استخدام curl للروابط العادية
+            curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o kernel-source.download "$SOURCE_URL"
+          fi
+
           # تحديد نوع الملف
           FILE_TYPE=$(file -b --mime-type kernel-source.download)
           echo "Detected MIME type: $FILE_TYPE"
+
           case "$FILE_TYPE" in
             application/zip)
               unzip -q kernel-source.download -d kernel-source
@@ -115,14 +135,13 @@ jobs:
               tar -xf kernel-source.tar -C kernel-source --strip-components=1
               ;;
             text/html)
-              echo "ERROR: Downloaded file is HTML (not a direct link). Please provide a direct download URL."
+              echo "ERROR: Downloaded file is HTML (not a direct link). Please provide a direct download URL or use Google Drive."
               exit 1
               ;;
             *)
               # إذا كان ملف عادي (غير مضغوط) نعتبره مجلد source صالح
               mkdir -p kernel-source-temp
               mv kernel-source.download kernel-source-temp/
-              # نفترض أنه مجلد مكتمل (مثل git clone)
               if [ -f "kernel-source-temp/Makefile" ] || [ -d "kernel-source-temp/arch" ]; then
                 mv kernel-source-temp/* kernel-source/
               else
@@ -131,6 +150,7 @@ jobs:
               fi
               ;;
           esac
+
           echo "KERNEL_SOURCE_DIR=kernel-source" >> $GITHUB_OUTPUT
           ls -la kernel-source/
 
@@ -146,17 +166,16 @@ jobs:
             exit 1
           fi
 
-      # ========== 2. الحصول على boot.img (ذكي) ==========
+      # ========== 2. الحصول على boot.img (يدعم الروابط العادية فقط) ==========
       - name: Download boot.img from URL
         id: download_boot
         if: steps.set_boot_url.outputs.effective_boot_url != ''
         run: |
           BOOT_URL="${{ steps.set_boot_url.outputs.effective_boot_url }}"
           mkdir -p kernel-source/stock_boot
-          curl -L -o kernel-source/stock_boot/boot.img "$BOOT_URL"
-          # التحقق من أن الملف ليس HTML
+          curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -o kernel-source/stock_boot/boot.img "$BOOT_URL"
           if file kernel-source/stock_boot/boot.img | grep -q "HTML"; then
-            echo "ERROR: Downloaded boot.img is HTML page, not a valid image."
+            echo "ERROR: Downloaded boot.img is HTML page."
             rm kernel-source/stock_boot/boot.img
             exit 1
           fi
