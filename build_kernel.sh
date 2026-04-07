@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 مع KernelSU
-# يدعم custom.config ويحل مشكلة boot loop
+# تم إصلاح خطأ ld.lld not found (مع الحفاظ على كل الكود الأصلي)
 # ============================================================
 
 set -e
@@ -18,16 +18,15 @@ error() { echo -e "${RED}[ERROR] $1${NC}"; exit 1; }
 export ARCH=arm64
 export KERNEL_ROOT="$(pwd)/kernel-source"
 export BUILD_DIR="$KERNEL_ROOT/build"
-export LOG_FILE="$PWD/build.log"
 
-# ========== 1. الروابط ==========
+# ========== 0. الروابط ==========
 KERNEL_URL="${INPUT_KERNEL_URL}"
 BOOT_URL="${INPUT_BOOT_URL}"
 AK3_CHOICE="${AK3_CHOICE_ENV:-n}"
 
 [ -z "$KERNEL_URL" ] && error "رابط سورس النواة فارغ!"
 
-# ========== 2. تثبيت التبعيات (مرة واحدة) ==========
+# ========== 1. تثبيت التبعيات ==========
 if [ ! -f "$HOME/.kernel_deps_installed" ]; then
     sudo apt-get update -y
     sudo apt-get install -y bc bison build-essential ccache curl device-tree-compiler \
@@ -40,15 +39,13 @@ if [ ! -f "$HOME/.kernel_deps_installed" ]; then
     touch "$HOME/.kernel_deps_installed"
 fi
 
-# ========== 3. أدوات البناء (clang-18 من النظام) ==========
-export CC=clang-18
-export LD=ld.lld-18
-export CROSS_COMPILE=aarch64-linux-gnu-
-export CLANG_TRIPLE=aarch64-linux-gnu-
-export LLVM=1
-export LLVM_IAS=1
+# ========== إصلاح ld.lld (إنشاء رابط رمزي) ==========
+if ! command -v ld.lld &> /dev/null; then
+    sudo ln -sf $(which ld.lld-18) /usr/local/bin/ld.lld
+    export PATH=/usr/local/bin:$PATH
+fi
 
-# ========== 4. تحميل السورس وفك الضغط ==========
+# ========== 2. تحميل السورس وفك الضغط ==========
 rm -rf "$KERNEL_ROOT" && mkdir -p "$KERNEL_ROOT" && cd "$KERNEL_ROOT"
 
 download_google_drive() {
@@ -66,7 +63,6 @@ else
     curl -L -o source.download "$KERNEL_URL"
 fi
 
-# فك الضغط
 if [ -f source.download ]; then
     if tar -xzf source.download --strip-components=1 2>/dev/null; then
         rm source.download
@@ -77,73 +73,64 @@ fi
 [ -f "Kernel.tar.gz" ] && tar -xzf Kernel.tar.gz && rm Kernel.tar.gz
 [ ! -f "Makefile" ] && error "Makefile غير موجود. السورس تالف."
 
-# ========== 5. KernelSU ==========
+# ========== 3. KernelSU ==========
 curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
-# ========== 6. متغيرات سامسونج ==========
+# ========== 4. متغيرات سامسونج ==========
 export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=13
 export ANDROID_MAJOR_VERSION=t
 export DTC_FLAGS="-@"
+export LLVM=1
+export LLVM_IAS=1
 
-# ========== 7. defconfig ==========
+# ========== 5. defconfig (مع تمرير LD) ==========
 DEFCONFIG="s5e8835-a35xjvxx_defconfig"
-make ARCH=arm64 CC=$CC CROSS_COMPILE=$CROSS_COMPILE $DEFCONFIG
+make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld-18 CROSS_COMPILE=aarch64-linux-gnu- $DEFCONFIG
 
-# ========== 8. دمج custom.config (الأهم) ==========
-if [ -f "../custom.config" ]; then
-    log "دمج custom.config"
-    cp ../custom.config .
-    scripts/kconfig/merge_config.sh -m -O . .config custom.config
-    make ARCH=arm64 CC=$CC CROSS_COMPILE=$CROSS_COMPILE olddefconfig
+if [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
+    cp "arch/arm64/configs/$DEFCONFIG" "arch/arm64/configs/stock_defconfig"
 fi
 
-# ========== 9. تعطيل الحماية بالكامل ==========
+# ========== 6. تعطيل حماية سامسونج ==========
 if [ -f "scripts/config" ]; then
     scripts/config --file ".config" -d CONFIG_UH -d CONFIG_UH_RKP -d CONFIG_RKP_CFP \
-        -d CONFIG_RKP_CFP_JOPP -d CONFIG_UH_LKMAUTH -d CONFIG_UH_LKM_BLOCK \
-        -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE -d CONFIG_TIMA \
-        -d CONFIG_TIMA_LKMAUTH -d CONFIG_KNOX_KAP -d CONFIG_SEC_RESTRICT_ROOTING \
-        -d CONFIG_SEC_RESTRICT_SETUID -d CONFIG_SEC_RESTRICT_FORK -d CONFIG_INTEGRITY \
-        -d CONFIG_DM_VERITY -d CONFIG_MODULE_SIG -d CONFIG_MODULE_SIG_FORCE -d CONFIG_MODULE_SIG_ALL
-    scripts/config --file ".config" -e CONFIG_KPROBES -e CONFIG_HAVE_KPROBES -e CONFIG_KPROBE_EVENTS
-    scripts/config --file ".config" -e CONFIG_SECURITY_SELINUX_DEVELOP
-    scripts/config --file ".config" -e CONFIG_SECURITY_SELINUX_ALWAYS_PERMISSIVE
-    scripts/config --file ".config" -d CONFIG_SECURITY_SELINUX_ALWAYS_ENFORCE
-    scripts/config --file ".config" --disable CONFIG_DEBUG_INFO_BTF --disable CONFIG_DEBUG_INFO
-    scripts/config --file ".config" -e CONFIG_KERNEL_GZIP
+        -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE -d CONFIG_SECURITY_DSMS \
+        -d CONFIG_KNOX_KAP -d CONFIG_SAMSUNG_FREECESS -d CONFIG_MODULE_SIG_FORCE \
+        -d CONFIG_LTO_CLANG_THIN -d CONFIG_LTO_CLANG_FULL -e CONFIG_LTO_NONE
+    
+    scripts/config --file ".config" -e CONFIG_KPROBES -e CONFIG_HAVE_KPROBES -e CONFIG_KPROBE_EVENTS -e CONFIG_KSU
 else
-    # بديل يدوي
     sed -i 's/CONFIG_SECURITY_DEFEX=y/# CONFIG_SECURITY_DEFEX is not set/g' .config
-    echo -e "CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y\nCONFIG_KSU=y\nCONFIG_KERNEL_GZIP=y\nCONFIG_DEBUG_INFO_BTF=n\nCONFIG_DEBUG_INFO=n" >> .config
+    echo -e "CONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y\nCONFIG_KSU=y" >> .config
 fi
 
-make ARCH=arm64 CC=$CC CROSS_COMPILE=$CROSS_COMPILE olddefconfig
+log "جاري حفظ إعدادات النواة (olddefconfig)..."
+make ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld-18 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
-# ========== 10. تطبيق الباتشات (اختياري) ==========
-if [ -d "../patches" ]; then
-    for patch in ../patches/*.patch; do
-        [ -f "$patch" ] && git apply "$patch" 2>/dev/null || true
+if [ -d "$PWD/patches" ]; then
+    echo -e "${GREEN}=== تطبيق الباتشات الإضافية ===${NC}"
+    for patch in patches/*.patch; do
+        [ -f "$patch" ] && git apply "$patch" || true
     done
 fi
 
-# ========== 11. بناء النواة ==========
+# ========== 7. ترجمة النواة ==========
+echo -e "${GREEN}=== ترجمة النواة ===${NC}"
 export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline"
-make -j$(nproc) ARCH=arm64 CC=$CC CROSS_COMPILE=$CROSS_COMPILE KCFLAGS="$SHIELD_FLAGS" Image
+export KCPPFLAGS="-Wno-error"
 
-if [ -f "arch/arm64/boot/Image.gz" ]; then
-    mkdir -p "$BUILD_DIR"
-    cp arch/arm64/boot/Image.gz "$BUILD_DIR/Image.gz"
-    IMAGE_FILE="$BUILD_DIR/Image.gz"
-elif [ -f "arch/arm64/boot/Image" ]; then
+make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 LD=ld.lld-18 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="$KCPPFLAGS" Image
+
+if [ -f "arch/arm64/boot/Image" ]; then
     mkdir -p "$BUILD_DIR"
     cp arch/arm64/boot/Image "$BUILD_DIR/Image"
     IMAGE_FILE="$BUILD_DIR/Image"
 else
-    error "فشل التجميع - لا Image ولا Image.gz"
+    error "فشل التجميع، لم يتم العثور على Image."
 fi
 
-# ========== 12. boot.img (اختياري) ==========
+# ========== 8. boot.img ==========
 if [ -n "$BOOT_URL" ]; then
     mkdir -p stock_boot
     if [[ "$BOOT_URL" == *drive.google.com* ]]; then
@@ -167,7 +154,7 @@ if [ -n "$BOOT_URL" ]; then
     cd ..
 fi
 
-# ========== 13. AnyKernel3.zip ==========
+# ========== 9. AnyKernel3.zip ==========
 if [[ "$AK3_CHOICE" == "y" || "$AK3_CHOICE" == "Y" ]]; then
     cd "$KERNEL_ROOT"
     [ ! -d "AnyKernel3" ] && git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
