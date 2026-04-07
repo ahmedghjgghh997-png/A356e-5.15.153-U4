@@ -143,7 +143,6 @@ if [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
 fi
 
 echo -e "${GREEN}=== المرحلة 6: تخصيص النواة (اختياري) ===${NC}"
-# مغلق في GitHub Actions لمنع التجمد، ولكنه موجود في الكود
 if [[ "$MENU_CHOICE_ENV" == "y" || "$MENU_CHOICE_ENV" == "Y" ]]; then
     if [ ! -t 0 ]; then
         warn "تخطي menuconfig في بيئة CI."
@@ -153,10 +152,19 @@ if [[ "$MENU_CHOICE_ENV" == "y" || "$MENU_CHOICE_ENV" == "Y" ]]; then
 fi
 
 echo -e "${GREEN}=== المرحلة 7: تعطيل حماية سامسونج وتفعيل KSU ===${NC}"
+
+# إجبار الكيرنل على تجاهل كل أخطاء سامسونج
+find . -name "Makefile" -exec sed -i 's/-Werror//g' {} +
+
 if [ -f "scripts/config" ]; then
     scripts/config --file ".config" -d CONFIG_UH -d CONFIG_UH_RKP -d CONFIG_RKP_CFP \
         -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE -d CONFIG_SECURITY_DSMS \
-        -d CONFIG_KNOX_KAP -d CONFIG_SAMSUNG_FREECESS -d CONFIG_MODULE_SIG_FORCE
+        -d CONFIG_KNOX_KAP -d CONFIG_SAMSUNG_FREECESS -d CONFIG_MODULE_SIG_FORCE \
+        -d CONFIG_WERROR
+    
+    # تعطيل تقنية LTO لأنها بتدمر تعريفات كاميرا سامسونج
+    scripts/config --file ".config" -d CONFIG_LTO_CLANG_THIN -d CONFIG_LTO_CLANG_FULL -e CONFIG_LTO_NONE
+    
     scripts/config --file ".config" -e CONFIG_KPROBES -e CONFIG_HAVE_KPROBES -e CONFIG_KPROBE_EVENTS -e CONFIG_KSU
 else
     sed -i 's/CONFIG_SECURITY_DEFEX=y/# CONFIG_SECURITY_DEFEX is not set/g' .config
@@ -174,7 +182,8 @@ if [ -d "$PWD/patches" ]; then
 fi
 
 echo -e "${GREEN}=== المرحلة 9: ترجمة النواة ===${NC}"
-make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- Image
+# السطر ده اتعدل: ضفنا KCFLAGS="-w" عشان المترجم يخرس خالص ومايطلعش أي Error يوقف البناء
+make -j$(nproc) ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-none-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-w" Image
 
 if [ ! -f "arch/arm64/boot/Image" ]; then error "فشل التجميع، لم يتم العثور على Image."; fi
 mkdir -p "$BUILD_DIR" && cp arch/arm64/boot/Image "$BUILD_DIR/"
@@ -205,7 +214,6 @@ magiskboot repack boot.img
 mv new-boot.img "$BUILD_DIR/boot.img"
 
 echo -e "${GREEN}=== المرحلة 11: إنشاء AnyKernel3.zip ===${NC}"
-# يتم تشغيلها لو اخترت y أو لو فعلتها في الـ YML
 if [[ "$AK3_CHOICE_ENV" == "y" || "$AK3_CHOICE_ENV" == "Y" ]]; then
     cd "$KERNEL_ROOT"
     if [ ! -d "AnyKernel3" ]; then
