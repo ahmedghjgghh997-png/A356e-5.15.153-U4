@@ -2,7 +2,6 @@
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380)
 # مع KernelSU + تفعيل KPROBES تلقائياً + تعطيل حماية Samsung
-# يعمل في GitHub Actions وبيئات CI
 # ============================================================
 
 export ARCH=arm64
@@ -65,11 +64,11 @@ apply_additional_patches() {
 
 prepare_stock_defconfig() {
     if [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
-        cp arch/arm64/configs/s25e8835_a35xjvxx_defconfig arch/arm64/configs/stock_defconfig
+        cp arch/arm64/configs/s5e8835-a35xjvxx_defconfig arch/arm64/configs/stock_defconfig
     fi
 }
 
-# ---- دالة تفعيل خيارات KPROBES (لـ KernelSU) ----
+# ---- تفعيل خيارات KPROBES (لـ KernelSU) ----
 enable_kprobes() {
     echo "[INFO] تفعيل خيارات KPROBES لدعم KernelSU..."
     scripts/config --file ".config" \
@@ -109,15 +108,15 @@ merge_custom_config() {
 }
 
 build_kernel() {
-    echo "[INFO] استخدام defconfig: s25e8835_a35xjvxx_defconfig"
-    make "${BUILD_OPTIONS[@]}" s25e8835_a35xjvxx_defconfig
+    echo "[INFO] استخدام defconfig: s5e8835-a35xjvxx_defconfig"
+    make "${BUILD_OPTIONS[@]}" s5e8835-a35xjvxx_defconfig
 
     prepare_stock_defconfig
     merge_custom_config
     remove_gcc_wrapper
     apply_additional_patches
 
-    # ---- تفعيل KPROBES (ضروري لـ KernelSU) ----
+    # ---- تفعيل KPROBES ----
     enable_kprobes
 
     # ---- تخطي menuconfig في بيئة CI (GitHub Actions) ----
