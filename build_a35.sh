@@ -1,7 +1,8 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380)
-# مع KernelSU + تفعيل KPROBES + Clang-18
+# مع KernelSU + تفعيل KPROBES + Clang-18 + تعطيل الحماية
+# يدعم التحميل من الروابط المباشرة و Google Drive
 # ============================================================
 
 export ARCH=arm64
@@ -49,11 +50,14 @@ apply_additional_patches() {
             echo "  -> تطبيق $(basename $patch)"
             git apply --check "$patch" && git apply "$patch" || echo "     (فشل أو مطبق مسبقاً)"
         done
+    else
+        echo "[INFO] لا يوجد مجلد patches، تخطي"
     fi
 }
 
 prepare_stock_defconfig() {
     if [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
+        echo "[INFO] إنشاء stock_defconfig من defconfig الأصلي"
         cp arch/arm64/configs/s5e8835-a35xjvxx_defconfig arch/arm64/configs/stock_defconfig
     fi
 }
@@ -67,7 +71,7 @@ enable_kprobes() {
 }
 
 disable_samsung_security() {
-    echo "[INFO] تعطيل حماية Samsung..."
+    echo "[INFO] تعطيل حماية Samsung (RKP, Knox, DEFEX, FIVE, PROCA)..."
     scripts/config --file ".config" \
         -d CONFIG_UH \
         -d CONFIG_UH_RKP \
@@ -75,6 +79,7 @@ disable_samsung_security() {
         -d CONFIG_SECURITY_DEFEX \
         -d CONFIG_PROCA \
         -d CONFIG_FIVE
+    echo "[INFO] تعطيل فحص CRC لضمان عمل الـ Wi-Fi واللمس..."
     scripts/config --file ".config" --disable CONFIG_MODULE_SIG_FORCE
 }
 
@@ -82,11 +87,14 @@ add_kernelsu() {
     if [ ! -d "KernelSU" ]; then
         echo "[INFO] إضافة KernelSU..."
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+    else
+        echo "[INFO] KernelSU موجود مسبقاً"
     fi
 }
 
 merge_custom_config() {
     if [ -f "custom.config" ]; then
+        echo "[INFO] دمج custom.config مع الإعدادات الأساسية..."
         scripts/kconfig/merge_config.sh -m -O . .config custom.config
     fi
 }
@@ -111,8 +119,8 @@ build_kernel() {
     disable_samsung_security
     add_kernelsu
 
-    echo "[INFO] بدء التجميع..."
-    make "${BUILD_OPTIONS[@]}" Image || { echo "[ERROR] فشل التجميع"; exit 1; }
+    echo "[INFO] بدء تجميع النواة (قد يستغرق وقتاً)..."
+    make "${BUILD_OPTIONS[@]}" Image || { echo "[ERROR] فشل تجميع النواة"; exit 1; }
 
     mkdir -p build
     cp arch/arm64/boot/Image build/
@@ -145,7 +153,7 @@ build_kernel() {
         echo "[WARN] لا يوجد stock_boot/boot.img، تم بناء Image فقط."
     fi
 
-    echo -e "\n[SUCCESS] تم التجميع!"
+    echo -e "\n[SUCCESS] تم التجميع بنجاح!"
     echo "Image: build/Image"
     [ -f "build/boot.img" ] && echo "boot.img: build/boot.img"
 }
