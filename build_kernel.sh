@@ -91,9 +91,9 @@ if [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
     cp "arch/arm64/configs/$DEFCONFIG" "arch/arm64/configs/stock_defconfig"
 fi
 
-# ========== إضافة: دمج custom.config ==========
+# ========== دمج custom.config (إذا كان موجودًا) ==========
 if [ -f "../custom.config" ]; then
-    echo -e "${GREEN}=== دمج custom.config (التعديلات الدائمة) ===${NC}"
+    echo -e "${GREEN}=== دمج custom.config ===${NC}"
     cp ../custom.config .
     scripts/kconfig/merge_config.sh -m -O . .config custom.config
     make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- olddefconfig
