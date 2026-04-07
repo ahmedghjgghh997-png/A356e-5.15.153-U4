@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380)
-# مع V=1 لعرض الأخطاء التفصيلية
+# سكريبت بناء نواة Samsung Galaxy A35 (Exynos 1380) - الإصدار النهائي
+# مع أحدث الأدوات: Clang 22.1.0 + GCC 15.2 + Binutils 2.46
 # ============================================================
 
 export ARCH=arm64
@@ -12,8 +12,9 @@ export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=14
 export ANDROID_MAJOR_VERSION=u
 
-export CC=clang-18
-export LD=ld.lld-18
+# تحديد المسارات للأدوات المثبتة مسبقاً في GitHub Actions
+export PATH="/usr/local/llvm/bin:/usr/local/gcc-arm/bin:/usr/local/binutils/bin:$PATH"
+export CC=clang
 export CROSS_COMPILE=aarch64-linux-gnu-
 export CLANG_TRIPLE=aarch64-linux-gnu-
 
@@ -22,12 +23,10 @@ export BUILD_OPTIONS=(
     -j$(nproc)
     ARCH=arm64
     CC=${CC}
-    LD=${LD}
     CROSS_COMPILE=${CROSS_COMPILE}
     CLANG_TRIPLE=${CLANG_TRIPLE}
     LLVM=1
     LLVM_IAS=1
-    V=1   # إظهار الأوامر الكاملة لتتبع الأخطاء
 )
 
 remove_gcc_wrapper() {
@@ -60,7 +59,7 @@ prepare_stock_defconfig() {
 }
 
 enable_kprobes() {
-    echo "[INFO] تفعيل KPROBES..."
+    echo "[INFO] تفعيل KPROBES لدعم KernelSU..."
     scripts/config --file ".config" \
         -e CONFIG_KPROBES \
         -e CONFIG_HAVE_KPROBES \
