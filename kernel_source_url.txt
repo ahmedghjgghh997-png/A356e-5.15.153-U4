@@ -1,1 +1,1 @@
-echo "https://github.com/ravindu644/android_kernel_samsung_a35.git" > kernel_source_url.txt
+https://github.com/ravindu644/android_kernel_samsung_a35.git
