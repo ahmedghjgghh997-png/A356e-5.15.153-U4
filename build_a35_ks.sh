@@ -1,12 +1,13 @@
 #!/bin/bash
-# build_a35_ksu.sh - Samsung A35 (SM-A356E) GKI 2.0 + KernelSU + Clang fixes
+# build_a35_ksu.sh - Samsung A35 (SM-A356E) GKI 2.0 + KernelSU
+# يدعم: بناء boot.img (إذا وجد stock/boot.img) أو AnyKernel3.zip (إذا لم يوجد)
 
 set -e
 
 # ========== الألوان ==========
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # ========== مساعدة ==========
@@ -16,7 +17,7 @@ show_help() {
     echo "  --clean         تنظيف البناء السابق"
     echo "  --use-out       استخدام مجلد out (للهواتف غير Exynos)"
     echo "  --skip-deps     تخطي تثبيت التبعيات"
-    echo "  --kernel-only   بناء Image فقط (بدون boot.img)"
+    echo "  --kernel-only   بناء Image فقط (بدون boot.img أو AnyKernel3)"
     echo "  --help          عرض هذه المساعدة"
     exit 0
 }
@@ -123,9 +124,10 @@ export TARGET_SOC="s5e8835"
 export PLATFORM_VERSION="15"
 export ANDROID_MAJOR_VERSION="v"
 
-# أعلام Clang لتجنب أخطاء تعريفات سامسونج
-export KBUILD_CFLAGS="$KBUILD_CFLAGS -Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end"
-export KBUILD_CFLAGS_MODULE="$KBUILD_CFLAGS_MODULE -Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end"
+# أعلام Clang (الدرع الواسع)
+export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline"
+export KCFLAGS="$SHIELD_FLAGS"
+export KCPPFLAGS="-Wno-error"
 
 # مجلد الإخراج
 if [ "$USE_OUT_DIR" = true ]; then
@@ -204,6 +206,8 @@ scripts/config --file "$OUT_DIR/.config" -d CONFIG_MODULE_SIG_FORCE
 scripts/config --file "$OUT_DIR/.config" -d CONFIG_SYSTEM_TRUSTED_KEYS
 scripts/config --file "$OUT_DIR/.config" --set-str CONFIG_LOCALVERSION "-KernelSU"
 scripts/config --file "$OUT_DIR/.config" -d CONFIG_MODULE_SRCVERSION_ALL
+# تعطيل BTF لتجنب أخطاء pahole
+scripts/config --file "$OUT_DIR/.config" -d CONFIG_DEBUG_INFO_BTF
 
 # ========== menuconfig ==========
 if [ "$MENUCONFIG" = true ]; then
@@ -214,7 +218,7 @@ fi
 
 # ========== بناء الكيرنال ==========
 echo "[8/9] بناء الكيرنال (قد يستغرق وقتاً)..."
-make $MAKE_OUT ARCH=arm64 -j$(nproc) Image KBUILD_CFLAGS="-Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end"
+make $MAKE_OUT ARCH=arm64 -j$(nproc) Image KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="-Wno-error"
 
 if [ -f "$OUT_DIR/arch/arm64/boot/Image" ]; then
     cp "$OUT_DIR/arch/arm64/boot/Image" "$BUILD_DIR/"
@@ -226,27 +230,46 @@ else
 fi
 echo -e "${GREEN}[✓] Image تم بناؤه بنجاح${NC}"
 
-# ========== إنشاء boot.img ==========
+# ========== إنشاء boot.img أو AnyKernel3.zip ==========
 if [ "$KERNEL_ONLY" = false ]; then
-    echo "[9/9] إنشاء boot.img..."
-    if [ ! -f "$STOCK_DIR/boot.img" ]; then
-        echo -e "${RED}❌ ملف boot.img غير موجود في مجلد stock/${NC}"
-        exit 1
+    # التحقق من وجود boot.img في مجلد stock
+    if [ -f "$STOCK_DIR/boot.img" ]; then
+        echo "[9/9] إنشاء boot.img معدل..."
+        cd "$BUILD_DIR"
+        cp "$STOCK_DIR/boot.img" .
+        magiskboot unpack boot.img
+        rm -f kernel
+        cp Image kernel
+        magiskboot repack boot.img
+        mv new-boot.img boot-ksu.img
+        tar -cvf boot-ksu.tar boot-ksu.img
+        rm -f boot.img kernel Image
+        echo -e "${GREEN}[✓] boot-ksu.img و boot-ksu.tar تم إنشاؤهما في $BUILD_DIR${NC}"
+    else
+        echo "[9/9] لم يتم العثور على boot.img، إنشاء AnyKernel3.zip..."
+        cd "$BUILD_DIR"
+        if [ ! -d "AnyKernel3" ]; then
+            git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+        fi
+        cp Image AnyKernel3/
+        cd AnyKernel3
+        zip -r9 "../AnyKernel3-$(date +%Y%m%d-%H%M%S).zip" . -x ".git*" "README.md" "*.zip"
+        cd ..
+        echo -e "${GREEN}[✓] AnyKernel3.zip تم إنشاؤه في $BUILD_DIR${NC}"
     fi
-    cd "$BUILD_DIR"
-    cp "$STOCK_DIR/boot.img" .
-    magiskboot unpack boot.img
-    rm -f kernel
-    cp Image kernel
-    magiskboot repack boot.img
-    mv new-boot.img boot-ksu.img
-    tar -cvf boot-ksu.tar boot-ksu.img
-    rm -f boot.img kernel Image
-    echo -e "${GREEN}[✓] boot-ksu.img و boot-ksu.tar تم إنشاؤهما في $BUILD_DIR${NC}"
 else
     echo -e "${GREEN}[✓] انتهى البناء (Image فقط)${NC}"
 fi
 
 echo -e "${GREEN}=========================================="
-echo "✅ اكتمل! يمكنك فلاش boot-ksu.img عبر Odin"
-echo "⚠️  تذكر عمل نسخة احتياطية للأقسام الأصلية${NC}"
+echo "✅ اكتمل!"
+if [ -f "$BUILD_DIR/boot-ksu.img" ]; then
+    echo "   - boot-ksu.img (فلاش عبر Odin أو fastboot)"
+    echo "   - boot-ksu.tar (لـ Odin)"
+elif [ -f "$BUILD_DIR/AnyKernel3-*.zip" ]; then
+    echo "   - AnyKernel3.zip (فلاش عبر TWRP)"
+else
+    echo "   - Image (الكيرنال فقط)"
+fi
+echo "⚠️  تذكر عمل نسخة احتياطية قبل الفلاش${NC}"
+echo "=========================================="
