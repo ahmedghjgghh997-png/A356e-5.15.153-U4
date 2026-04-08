@@ -1,7 +1,6 @@
 #!/bin/bash
 # ============================================================
-# سكريبت بناء نواة Samsung Galaxy A35 مع KernelSU
-# تم دمج الخيار النووي لتخطي أخطاء تعريفات Exynos 1380
+# سكريبت بناء نواة Samsung Galaxy A35 مع KernelSU (النسخة النهائية)
 # ============================================================
 
 set -eo pipefail
@@ -38,12 +37,18 @@ log "تم استلام رابط النواة: $KERNEL_URL"
 echo -e "${GREEN}=== المرحلة 1: تثبيت التبعيات الأساسية ===${NC}"
 if [ ! -f "$HOME/.kernel_deps_installed" ]; then
     sudo apt-get update -y
-    sudo apt-get install -y bc bison build-essential ccache curl device-tree-compiler \
-        flex g++-multilib gcc-multilib git gnupg gperf imagemagick libc6-dev-i386 \
-        libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev \
-        libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
-        zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
-        unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev cpio tofrodos python3-markdown
+    # القائمة الشاملة من دليل ravindu644
+    sudo apt-get install -y git device-tree-compiler lz4 xz-utils zlib1g-dev openjdk-17-jdk \
+        gcc g++ python3 python-is-python3 p7zip-full android-sdk-libsparse-utils erofs-utils \
+        default-jdk gnupg flex bison gperf build-essential zip curl libc6-dev libncurses-dev \
+        libx11-dev libreadline-dev libgl1 libgl1-mesa-dev make bc grep tofrodos \
+        python3-markdown libxml2-utils xsltproc cpio kmod openssl libelf-dev pahole \
+        libssl-dev libarchive-tools zstd rsync --fix-missing
+    
+    # محاولة تثبيت libtinfo5 (قد لا تكون متاحة في Ubuntu 24.04)
+    wget -q http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb -O /tmp/libtinfo5.deb && \
+        sudo dpkg -i /tmp/libtinfo5.deb 2>/dev/null || warn "libtinfo5 غير متوفر (قد لا يكون ضرورياً)."
+    
     pip install gdown --break-system-packages 2>/dev/null || {
         warn "فشل تثبيت gdown عبر pip. سيتم محاولة تحميله يدويًا."
         if ! command -v gdown &>/dev/null; then
@@ -63,7 +68,7 @@ echo -e "${GREEN}=== المرحلة 2: تحميل سلاسل الأدوات ===$
 mkdir -p "$TOOLCHAINS_DIR"
 
 # ------------------------------
-# تحميل Clang من مستودع AOSP الرسمي عبر git clone
+# تحميل Clang من مستودع AOSP الرسمي عبر git clone (طريقة مضمونة)
 # ------------------------------
 if [ ! -d "$TOOLCHAINS_DIR/clang-r450784e" ]; then
     log "تحميل clang-r450784e من مستودع AOSP الرسمي..."
