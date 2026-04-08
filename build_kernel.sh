@@ -63,43 +63,51 @@ echo -e "${GREEN}=== المرحلة 2: تحميل سلاسل الأدوات ===$
 mkdir -p "$TOOLCHAINS_DIR"
 
 # ------------------------------
-# تحميل Clang بطريقة موثوقة 100% (من مستودع ravindu644)
+# تحميل Clang من مستودع AOSP الرسمي عبر git clone
 # ------------------------------
 if [ ! -d "$TOOLCHAINS_DIR/clang-r450784e" ]; then
-    log "تحميل clang-r450784e من مستودع موثوق..."
+    log "تحميل clang-r450784e من مستودع AOSP الرسمي..."
     cd "$TOOLCHAINS_DIR"
     
-    wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/clang-r450784e.tar.gz || {
-        error "فشل تحميل Clang من الرابط الأساسي."
-    }
+    git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-temp
     
-    mkdir -p clang-r450784e
-    tar -xf clang-r450784e.tar.gz -C clang-r450784e
-    rm clang-r450784e.tar.gz
+    if [ -d "clang-temp/clang-r450784e" ]; then
+        mv clang-temp/clang-r450784e ./
+        log "تم استخراج clang-r450784e بنجاح."
+    else
+        error "لم يتم العثور على clang-r450784e في المستودع."
+    fi
     
-    log "تم تحميل clang-r450784e بنجاح."
+    rm -rf clang-temp
     cd - >/dev/null
 fi
 
 # ------------------------------
-# تحميل ARM GNU Toolchain
+# تحميل ARM GNU Toolchain من Linaro (مضمون)
 # ------------------------------
 if [ ! -d "$TOOLCHAINS_DIR/arm-gnu-toolchain-14.2" ]; then
-    log "تحميل arm-gnu-toolchain-14.2..."
+    log "تحميل arm-gnu-toolchain-14.2 من Linaro..."
     cd "$TOOLCHAINS_DIR"
-    wget -q --header="Accept: application/octet-stream" \
-         "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz?rev=..." \
-         -O arm-gnu-toolchain.tar.xz || {
-        warn "فشل تحميل ARM toolchain من الموقع الرسمي، جاري استخدام مرآة بديلة..."
-        wget -q https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz -O arm-gnu-toolchain.tar.xz
+    
+    wget -q https://releases.linaro.org/components/toolchain/binaries/latest/armv8l-linux-gnueabihf/gcc-linaro-14.2.1-2025.01-x86_64_aarch64-linux-gnu.tar.xz -O gcc-linaro.tar.xz || {
+        warn "فشل تحميل من Linaro، جاري استخدام رابط ARM الرسمي..."
+        wget -q --header="Accept: application/octet-stream" \
+             "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz?rev=..." \
+             -O gcc-arm.tar.xz
     }
-    if [ -f arm-gnu-toolchain.tar.xz ]; then
-        tar -xf arm-gnu-toolchain.tar.xz
-        mv arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu arm-gnu-toolchain-14.2
-        rm arm-gnu-toolchain.tar.xz
+    
+    if [ -f gcc-linaro.tar.xz ]; then
+        tar -xf gcc-linaro.tar.xz
+        mv gcc-linaro-* arm-gnu-toolchain-14.2
+        rm gcc-linaro.tar.xz
+    elif [ -f gcc-arm.tar.xz ]; then
+        tar -xf gcc-arm.tar.xz
+        mv arm-gnu-toolchain-* arm-gnu-toolchain-14.2
+        rm gcc-arm.tar.xz
     else
-        error "تعذر تحميل ARM GNU Toolchain."
+        error "تعذر تحميل ARM GNU Toolchain من أي مصدر."
     fi
+    
     cd - >/dev/null
 fi
 
@@ -148,7 +156,7 @@ fi
 [ -f "Kernel.tar.gz" ] && tar -xzf Kernel.tar.gz && rm Kernel.tar.gz
 [ ! -f "Makefile" ] && error "لم يتم العثور على Makefile. تأكد من صحة سورس النواة."
 
-# ====== تحسين 1: إصلاح أذونات الملفات ======
+# إصلاح أذونات الملفات
 log "إصلاح أذونات مجلد النواة..."
 chmod -R 755 "$KERNEL_ROOT"
 
@@ -165,16 +173,16 @@ export LLVM_IAS=1
 
 DEFCONFIG="s5e8835-a35xjvxx_defconfig"
 
-# ====== تحسين 3: نسخ stock_defconfig قبل التعديل ======
+# نسخ stock_defconfig قبل التعديل
 if [ -f "arch/arm64/configs/$DEFCONFIG" ] && [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
     cp "arch/arm64/configs/$DEFCONFIG" "arch/arm64/configs/stock_defconfig"
     log "تم نسخ defconfig إلى stock_defconfig لمنع رسالة الخطأ."
 fi
 
-# 1. إزالة جميع ملفات الـ GCC wrappers عشان متتعارضش مع LLVM
+# إزالة جميع ملفات الـ GCC wrappers
 sed -i '/REAL_CC/d; /CFP_CC/d; /wrapper/d' Makefile 2>/dev/null || true
 
-# 2. حقن درع الأخطاء مباشرة داخل ملف الـ Makefile الرئيسي
+# حقن درع الأخطاء
 log "حقن أوامر تخطي الأخطاء داخل Makefile..."
 if grep -q '^KBUILD_CFLAGS\s*+=' Makefile; then
     sed -i '/^KBUILD_CFLAGS\s*+=/a KBUILD_CFLAGS += -Wno-error -Wno-implicit-int -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-return-type -Wno-int-conversion -Wno-vla' Makefile
@@ -182,19 +190,18 @@ else
     echo "KBUILD_CFLAGS += -Wno-error -Wno-implicit-int -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-return-type -Wno-int-conversion -Wno-vla" >> Makefile
 fi
 
-# 3. مسح أي أمر -Werror مستخبي في أي ملف فرعي في السورس كله
+# مسح -Werror من جميع الملفات
 log "تدمير -Werror من جميع الملفات الفرعية..."
 find . -type f -name "Makefile*" -exec sed -i 's/-Werror//g' {} +
 find . -type f -name "Kbuild*" -exec sed -i 's/-Werror//g' {} +
 
-# ====== تحسين 3 (تكملة): خداع النظام لقراءة stock_defconfig ======
+# خداع النظام لقراءة stock_defconfig
 sed -i 's|scripts/kconfig/conf --olddefconfig Kconfig|scripts/kconfig/conf --olddefconfig --defconfig=arch/arm64/configs/stock_defconfig Kconfig|g' scripts/kconfig/Makefile 2>/dev/null || true
 
 make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- $DEFCONFIG
 
 echo -e "${GREEN}=== المرحلة 6: تعطيل حماية سامسونج وتفعيل KSU ===${NC}"
 if [ -f "scripts/config" ]; then
-    # ====== تحسين 2: إضافة خيارات تعطيل إضافية ======
     scripts/config --file ".config" -d CONFIG_UH -d CONFIG_UH_RKP -d CONFIG_UH_LKMAUTH -d CONFIG_UH_LKM_BLOCK \
         -d CONFIG_RKP_CFP -d CONFIG_RKP_CFP_JOPP \
         -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE -d CONFIG_SECURITY_DSMS \
@@ -223,7 +230,7 @@ if [ -d "$PWD/patches" ]; then
     done
 fi
 
-# ====== تحسين 4: تطبيق باتشات إصلاح أخطاء قديمة (اختياري) ======
+# باتشات إصلاح أخطاء قديمة (اختياري)
 if [[ "$APPLY_LEGACY_FIXES" == "1" ]]; then
     echo -e "${GREEN}=== المرحلة 7.5: تطبيق باتشات إصلاح النواة القديمة ===${NC}"
     log "تحميل مستودع الباتشات..."
