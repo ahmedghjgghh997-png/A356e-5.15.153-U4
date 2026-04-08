@@ -27,7 +27,6 @@ KERNEL_URL="${KERNEL_URL_ENV}"
 BOOT_URL="${BOOT_URL_ENV}"
 
 if [ -z "$KERNEL_URL" ]; then error "رابط سورس النواة فارغ!"; fi
-# BOOT_URL أصبح اختياريًا، نسمح بأن يكون فارغًا
 if [ -n "$BOOT_URL" ]; then
     log "تم استلام رابط البوت: $BOOT_URL"
 else
@@ -47,7 +46,6 @@ if [ ! -f "$HOME/.kernel_deps_installed" ]; then
         unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev cpio tofrodos python3-markdown
     pip install gdown --break-system-packages 2>/dev/null || {
         warn "فشل تثبيت gdown عبر pip. سيتم محاولة تحميله يدويًا."
-        # محاولة تثبيت gdown يدويًا إذا فشل pip
         if ! command -v gdown &>/dev/null; then
             wget -q https://github.com/wkentaro/gdown/releases/download/v5.2.0/gdown.pl -O "$HOME/.local/bin/gdown"
             chmod +x "$HOME/.local/bin/gdown"
@@ -57,7 +55,6 @@ if [ ! -f "$HOME/.kernel_deps_installed" ]; then
     touch "$HOME/.kernel_deps_installed"
 fi
 
-# ضمان وجود gdown بعد محاولة التثبيت
 if ! command -v gdown &>/dev/null; then
     warn "لم يتم العثور على gdown. سيتم استخدام بديل curl مع cookies."
 fi
@@ -65,38 +62,31 @@ fi
 echo -e "${GREEN}=== المرحلة 2: تحميل سلاسل الأدوات ===${NC}"
 mkdir -p "$TOOLCHAINS_DIR"
 
+# ------------------------------
+# تحميل Clang بطريقة موثوقة 100% (من مستودع ravindu644)
+# ------------------------------
 if [ ! -d "$TOOLCHAINS_DIR/clang-r450784e" ]; then
-    log "تحميل clang-r450784e..."
+    log "تحميل clang-r450784e من مستودع موثوق..."
     cd "$TOOLCHAINS_DIR"
-    # رابط مباشر صحيح من فرع clang-r450784e (مستخدم في AOSP)
-    wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784e.tar.gz || {
-        # رابط بديل باستخدام git clone بشكل مؤقت
-        warn "فشل تحميل clang من الرابط المباشر، جاري git clone..."
-        git clone --depth=1 --branch main https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-temp
-        mkdir -p clang-r450784e
-        cp -r clang-temp/clang-r450784e/* clang-r450784e/ 2>/dev/null || {
-            warn "فشل نسخ clang-r450784e من المستودع، جاري تنزيل أداة بديلة..."
-            # بديل: clang من LLVM الرسمي
-            wget -q https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.7/clang+llvm-15.0.7-x86_64-linux-gnu-ubuntu-18.04.tar.xz
-            tar -xf clang+llvm-15.0.7-x86_64-linux-gnu-ubuntu-18.04.tar.xz
-            mv clang+llvm-15.0.7-x86_64-linux-gnu-ubuntu-18.04 clang-r450784e
-            rm clang+llvm-15.0.7-x86_64-linux-gnu-ubuntu-18.04.tar.xz
-        }
-        rm -rf clang-temp
+    
+    wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/clang-r450784e.tar.gz || {
+        error "فشل تحميل Clang من الرابط الأساسي."
     }
-    # إذا نجح تحميل الملف tar.gz، فكه
-    if [ -f "clang-r450784e.tar.gz" ]; then
-        mkdir -p clang-r450784e && tar -xf clang-r450784e.tar.gz -C clang-r450784e
-        rm clang-r450784e.tar.gz
-    fi
+    
+    mkdir -p clang-r450784e
+    tar -xf clang-r450784e.tar.gz -C clang-r450784e
+    rm clang-r450784e.tar.gz
+    
+    log "تم تحميل clang-r450784e بنجاح."
     cd - >/dev/null
 fi
 
+# ------------------------------
+# تحميل ARM GNU Toolchain
+# ------------------------------
 if [ ! -d "$TOOLCHAINS_DIR/arm-gnu-toolchain-14.2" ]; then
     log "تحميل arm-gnu-toolchain-14.2..."
     cd "$TOOLCHAINS_DIR"
-    # رابط مباشر بديل يتجاوز مشكلة EULA باستخدام مرآة أو رابط من ARM مباشر بصيغة مختلفة
-    # نستخدم رابط من developer.arm.com مع قبول EULA عبر معامل خاص
     wget -q --header="Accept: application/octet-stream" \
          "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz?rev=..." \
          -O arm-gnu-toolchain.tar.xz || {
@@ -121,10 +111,8 @@ rm -rf "$KERNEL_ROOT" && mkdir -p "$KERNEL_ROOT" && cd "$KERNEL_ROOT"
 download_google_drive() {
     local URL="$1"
     local OUTPUT="$2"
-    # تحسين استخراج معرف الملف
     local FILE_ID=$(echo "$URL" | grep -oE '([a-zA-Z0-9_-]{25,})' | head -1)
     if [ -z "$FILE_ID" ]; then
-        # محاولة استخراج من نمط /d/ أو id=
         FILE_ID=$(echo "$URL" | sed -n 's/.*\/d\/\([^\/]*\).*/\1/p')
         [ -z "$FILE_ID" ] && FILE_ID=$(echo "$URL" | sed -n 's/.*id=\([^&]*\).*/\1/p')
     fi
@@ -133,7 +121,6 @@ download_google_drive() {
     if command -v gdown &>/dev/null; then
         gdown "https://drive.google.com/uc?id=${FILE_ID}" -O "$OUTPUT"
     else
-        # بديل curl مع cookies
         log "استخدام curl لتحميل من Google Drive..."
         curl -L -b /tmp/cookies -c /tmp/cookies "https://drive.google.com/uc?export=download&id=${FILE_ID}" -o "$OUTPUT"
     fi
@@ -161,6 +148,10 @@ fi
 [ -f "Kernel.tar.gz" ] && tar -xzf Kernel.tar.gz && rm Kernel.tar.gz
 [ ! -f "Makefile" ] && error "لم يتم العثور على Makefile. تأكد من صحة سورس النواة."
 
+# ====== تحسين 1: إصلاح أذونات الملفات ======
+log "إصلاح أذونات مجلد النواة..."
+chmod -R 755 "$KERNEL_ROOT"
+
 echo -e "${GREEN}=== المرحلة 4: حقن كود KernelSU ===${NC}"
 curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
@@ -172,16 +163,22 @@ export DTC_FLAGS="-@"
 export LLVM=1
 export LLVM_IAS=1
 
+DEFCONFIG="s5e8835-a35xjvxx_defconfig"
+
+# ====== تحسين 3: نسخ stock_defconfig قبل التعديل ======
+if [ -f "arch/arm64/configs/$DEFCONFIG" ] && [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
+    cp "arch/arm64/configs/$DEFCONFIG" "arch/arm64/configs/stock_defconfig"
+    log "تم نسخ defconfig إلى stock_defconfig لمنع رسالة الخطأ."
+fi
+
 # 1. إزالة جميع ملفات الـ GCC wrappers عشان متتعارضش مع LLVM
 sed -i '/REAL_CC/d; /CFP_CC/d; /wrapper/d' Makefile 2>/dev/null || true
 
-# 2. حقن درع الأخطاء مباشرة داخل ملف الـ Makefile الرئيسي غصب عن السورس
+# 2. حقن درع الأخطاء مباشرة داخل ملف الـ Makefile الرئيسي
 log "حقن أوامر تخطي الأخطاء داخل Makefile..."
-# التأكد من وجود سطر KBUILD_CFLAGS قبل الإضافة
 if grep -q '^KBUILD_CFLAGS\s*+=' Makefile; then
     sed -i '/^KBUILD_CFLAGS\s*+=/a KBUILD_CFLAGS += -Wno-error -Wno-implicit-int -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-return-type -Wno-int-conversion -Wno-vla' Makefile
 else
-    # إضافة تعريف KBUILD_CFLAGS إذا لم يكن موجودًا
     echo "KBUILD_CFLAGS += -Wno-error -Wno-implicit-int -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-return-type -Wno-int-conversion -Wno-vla" >> Makefile
 fi
 
@@ -190,16 +187,16 @@ log "تدمير -Werror من جميع الملفات الفرعية..."
 find . -type f -name "Makefile*" -exec sed -i 's/-Werror//g' {} +
 find . -type f -name "Kbuild*" -exec sed -i 's/-Werror//g' {} +
 
-DEFCONFIG="s5e8835-a35xjvxx_defconfig"
-make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- $DEFCONFIG
+# ====== تحسين 3 (تكملة): خداع النظام لقراءة stock_defconfig ======
+sed -i 's|scripts/kconfig/conf --olddefconfig Kconfig|scripts/kconfig/conf --olddefconfig --defconfig=arch/arm64/configs/stock_defconfig Kconfig|g' scripts/kconfig/Makefile 2>/dev/null || true
 
-if [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
-    cp "arch/arm64/configs/$DEFCONFIG" "arch/arm64/configs/stock_defconfig"
-fi
+make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- $DEFCONFIG
 
 echo -e "${GREEN}=== المرحلة 6: تعطيل حماية سامسونج وتفعيل KSU ===${NC}"
 if [ -f "scripts/config" ]; then
-    scripts/config --file ".config" -d CONFIG_UH -d CONFIG_UH_RKP -d CONFIG_RKP_CFP \
+    # ====== تحسين 2: إضافة خيارات تعطيل إضافية ======
+    scripts/config --file ".config" -d CONFIG_UH -d CONFIG_UH_RKP -d CONFIG_UH_LKMAUTH -d CONFIG_UH_LKM_BLOCK \
+        -d CONFIG_RKP_CFP -d CONFIG_RKP_CFP_JOPP \
         -d CONFIG_SECURITY_DEFEX -d CONFIG_PROCA -d CONFIG_FIVE -d CONFIG_SECURITY_DSMS \
         -d CONFIG_KNOX_KAP -d CONFIG_SAMSUNG_FREECESS -d CONFIG_MODULE_SIG_FORCE \
         -d CONFIG_LTO_CLANG_THIN -d CONFIG_LTO_CLANG_FULL -e CONFIG_LTO_NONE
@@ -220,21 +217,37 @@ if [ -d "$PWD/patches" ]; then
             if git rev-parse --git-dir > /dev/null 2>&1; then
                 git apply "$patch" || warn "فشل تطبيق الباتش: $patch"
             else
-                # لو مش git repo، نستخدم patch command
                 patch -p1 < "$patch" || warn "فشل تطبيق الباتش: $patch"
             fi
         }
     done
 fi
 
+# ====== تحسين 4: تطبيق باتشات إصلاح أخطاء قديمة (اختياري) ======
+if [[ "$APPLY_LEGACY_FIXES" == "1" ]]; then
+    echo -e "${GREEN}=== المرحلة 7.5: تطبيق باتشات إصلاح النواة القديمة ===${NC}"
+    log "تحميل مستودع الباتشات..."
+    git clone --depth=1 https://github.com/ravindu644/Android-Kernel-Tutorials.git patches_repo
+    
+    for patch in \
+        "patches/018.yylloc.patch" \
+        "patches/020.sec_debug_test.patch" \
+        "patches/015.fix_gen_kheaders.sh_cpio_not_found.patch"
+    do
+        if [ -f "patches_repo/$patch" ]; then
+            log "تطبيق $patch ..."
+            patch -p1 < "patches_repo/$patch" || warn "فشل تطبيق $patch"
+        fi
+    done
+    rm -rf patches_repo
+fi
+
 echo -e "${GREEN}=== المرحلة 8: ترجمة النواة ===${NC}"
-# البناء نظيف الآن لأن ملفات السورس تم تعديلها جذرياً
 make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-none-linux-gnu- Image
 
 if [ ! -f "arch/arm64/boot/Image" ]; then error "فشل التجميع، لم يتم العثور على Image."; fi
 mkdir -p "$BUILD_DIR" && cp arch/arm64/boot/Image "$BUILD_DIR/"
 
-# التحقق من وجود رابط boot قبل المتابعة
 if [ -n "$BOOT_URL" ]; then
     echo -e "${GREEN}=== المرحلة 9: تحضير boot.img ===${NC}"
     mkdir -p "$KERNEL_ROOT/stock_boot"
@@ -245,13 +258,12 @@ if [ -n "$BOOT_URL" ]; then
     fi
 
     mkdir -p "$HOME/tools/magisk" && cd "$HOME/tools/magisk"
-    # تحميل Magisk app واستخراج libmagiskboot.so و libc++_shared.so
     wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
     unzip -q -j Magisk-v27.0.apk 'lib/x86_64/libmagiskboot.so' -d .
-    unzip -q -j Magisk-v27.0.apk 'lib/x86_64/libc++_shared.so' -d .   # مطلوب لتشغيل magiskboot
+    unzip -q -j Magisk-v27.0.apk 'lib/x86_64/libc++_shared.so' -d .
     mv libmagiskboot.so magiskboot && chmod +x magiskboot
     export PATH="$HOME/tools/magisk:$PATH"
-    export LD_LIBRARY_PATH="$HOME/tools/magisk:$LD_LIBRARY_PATH"  # ليجد libc++_shared.so
+    export LD_LIBRARY_PATH="$HOME/tools/magisk:$LD_LIBRARY_PATH"
 
     cd "$KERNEL_ROOT"
     mkdir -p boot_work && cp "$KERNEL_ROOT/stock_boot/boot.img" boot_work/
