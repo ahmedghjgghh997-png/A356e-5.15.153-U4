@@ -1,126 +1,120 @@
-name: Build Kernel with KernelSU for Samsung A35
+name: Build Kernel with KernelSU
 
 on:
   workflow_dispatch:
     inputs:
       kernel_source_url:
-        description: 'رابط سورس الكيرنال (Git clone URL)'
+        description: 'رابط سورس الكيرنال (git clone)'
         required: true
-        default: 'https://github.com/Samsung/exynos1380_kernel.git'
+        default: 'https://github.com/Samsung/exynos_kernel.git'
       boot_img_url:
-        description: 'رابط مباشر لتحميل boot.img الأصلي'
-        required: true
-        default: 'https://example.com/boot.img'
-      custom_defconfig:
-        description: 'اسم الـ defconfig (اختياري)'
+        description: 'رابط مباشر لـ boot.img الأصلي (اختياري)'
         required: false
-        default: 's5e8835-a35xjvxx_defconfig'
+        default: ''
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-    - name: Checkout (empty)
-      run: echo "بدء البناء..."
+      - name: Checkout kernel source
+        run: |
+          git clone --depth=1 ${{ github.event.inputs.kernel_source_url }} kernel
+          cd kernel
+          # إذا كان السورس يحتوي على مجلد common أو kernel-5.15، ندخل إليه
+          if [ -d "common" ] && [ -f "common/Makefile" ]; then
+            cd common
+            echo "KERNEL_ROOT=$(pwd)" >> $GITHUB_ENV
+          elif [ -d "kernel-5.15" ] && [ -f "kernel-5.15/Makefile" ]; then
+            cd kernel-5.15
+            echo "KERNEL_ROOT=$(pwd)" >> $GITHUB_ENV
+          else
+            echo "KERNEL_ROOT=$(pwd)" >> $GITHUB_ENV
+          fi
 
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y git device-tree-compiler lz4 xz-utils zlib1g-dev openjdk-17-jdk \
-          gcc g++ python3 python-is-python3 p7zip-full android-sdk-libsparse-utils erofs-utils \
-          default-jdk gnupg flex bison gperf build-essential zip curl libc6-dev libncurses-dev \
-          libx11-dev libreadline-dev libgl1 libgl1-mesa-dev bc tofrodos make sudo grep libtinfo6 \
-          cpio kmod openssl libelf-dev pahole libssl-dev libarchive-tools zstd rsync wget patch
-        wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
-        sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y git device-tree-compiler lz4 xz-utils zlib1g-dev openjdk-17-jdk \
+            gcc g++ python3 python-is-python3 p7zip-full android-sdk-libsparse-utils erofs-utils \
+            default-jdk gnupg flex bison gperf build-essential zip curl libc6-dev libncurses-dev \
+            libx11-dev libreadline-dev libgl1 libgl1-mesa-dev bc tofrodos make sudo grep libtinfo6 \
+            cpio kmod openssl libelf-dev pahole libssl-dev libarchive-tools zstd rsync wget patch
+          wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
+          sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
 
-    - name: Download magiskboot
-      run: |
-        curl -L -o magisk.apk https://github.com/topjohnwu/Magisk/releases/latest/download/Magisk.apk
-        unzip -j magisk.apk 'lib/x86_64/libmagiskboot.so' -d .
-        mv libmagiskboot.so magiskboot
-        chmod +x magiskboot
-        sudo cp magiskboot /usr/local/bin/
+      - name: Get magiskboot
+        run: |
+          curl -L -o magisk.apk https://github.com/topjohnwu/Magisk/releases/latest/download/Magisk.apk
+          unzip -j magisk.apk 'lib/x86_64/libmagiskboot.so' -d .
+          mv libmagiskboot.so magiskboot
+          chmod +x magiskboot
+          sudo cp magiskboot /usr/local/bin/
 
-    - name: Clone kernel source
-      run: |
-        git clone --depth=1 "${{ github.event.inputs.kernel_source_url }}" kernel_source
-        cd kernel_source
-        # البحث عن kernel root
-        if [ -f "Makefile" ]; then
-          echo "KERNEL_ROOT=kernel_source" >> $GITHUB_ENV
-        elif [ -d "common" ]; then
-          echo "KERNEL_ROOT=kernel_source/common" >> $GITHUB_ENV
-        elif [ -d "kernel-5.15" ]; then
-          echo "KERNEL_ROOT=kernel_source/kernel-5.15" >> $GITHUB_ENV
-        else
-          echo "لم يتم العثور على kernel root"
-          exit 1
-        fi
+      - name: Setup toolchains
+        run: |
+          mkdir -p toolchains && cd toolchains
+          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz
+          mkdir clang && cd clang && tar -xzf ../clang-r450784d.tar.gz && cd ..
+          wget https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+          tar -xf arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+          mv arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu gcc
+          cd ..
 
-    - name: Download stock boot.img
-      run: |
-        mkdir -p stock
-        wget -O stock/boot.img "${{ github.event.inputs.boot_img_url }}"
+      - name: Build kernel
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          export ARCH=arm64
+          export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
+          export PATH="$GITHUB_WORKSPACE/toolchains/gcc/bin:$PATH"
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CC=clang
+          export LD=ld.lld
+          export LLVM=1
+          export LLVM_IAS=1
+          export TARGET_SOC=s5e8835
+          export PLATFORM_VERSION=15
+          export ANDROID_MAJOR_VERSION=v
 
-    - name: Setup toolchains
-      run: |
-        mkdir -p toolchains
-        cd toolchains
-        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz
-        mkdir clang && cd clang && tar -xzf ../clang-r450784d.tar.gz && cd ..
-        wget -q https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
-        tar -xf arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
-        mv arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu gcc
-        cd ..
+          # إنشاء custom.config لتعطيل الحماية
+          cat > custom.config << EOF
+          CONFIG_UH=n
+          CONFIG_UH_RKP=n
+          CONFIG_UH_LKMAUTH=n
+          CONFIG_UH_LKM_BLOCK=n
+          CONFIG_RKP_CFP_JOPP=n
+          CONFIG_RKP_CFP=n
+          CONFIG_SECURITY_DEFEX=n
+          CONFIG_PROCA=n
+          CONFIG_FIVE=n
+          EOF
 
-    - name: Build Kernel with KernelSU
-      working-directory: ${{ env.KERNEL_ROOT }}
-      run: |
-        export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
-        export PATH="$GITHUB_WORKSPACE/toolchains/gcc/bin:$PATH"
-        export ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1
-        export TARGET_SOC=s5e8835 PLATFORM_VERSION=15 ANDROID_MAJOR_VERSION=v
+          # استخدام defconfig
+          make s5e8835-a35xjvxx_defconfig
+          scripts/kconfig/merge_config.sh .config custom.config
+          scripts/config --file .config -d CONFIG_MODULE_SIG
+          scripts/config --file .config -d CONFIG_MODULE_SIG_FORCE
+          scripts/config --file .config --set-str CONFIG_LOCALVERSION "-KernelSU"
 
-        # جلب KernelSU
-        curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+          make -j$(nproc) Image
+          cp arch/arm64/boot/Image $GITHUB_WORKSPACE/Image
 
-        # إعداد custom.config لتعطيل RKP
-        cat > custom.config << EOF
-        CONFIG_UH=n
-        CONFIG_UH_RKP=n
-        CONFIG_UH_LKMAUTH=n
-        CONFIG_UH_LKM_BLOCK=n
-        CONFIG_RKP_CFP_JOPP=n
-        CONFIG_RKP_CFP=n
-        CONFIG_SECURITY_DEFEX=n
-        CONFIG_PROCA=n
-        CONFIG_FIVE=n
-        EOF
+      - name: Create boot.img (if boot.img URL provided)
+        if: github.event.inputs.boot_img_url != ''
+        run: |
+          wget -O boot.img "${{ github.event.inputs.boot_img_url }}"
+          magiskboot unpack boot.img
+          rm -f kernel
+          cp Image kernel
+          magiskboot repack boot.img
+          mv new-boot.img boot-ksu.img
+          tar -cvf boot-ksu.tar boot-ksu.img
 
-        # بناء kernel
-        DEFCONFIG="${{ github.event.inputs.custom_defconfig }}"
-        make $DEFCONFIG
-        scripts/kconfig/merge_config.sh .config custom.config
-        make -j$(nproc) Image
-
-        cp arch/arm64/boot/Image $GITHUB_WORKSPACE/Image
-
-    - name: Create boot.img
-      run: |
-        cd $GITHUB_WORKSPACE
-        cp stock/boot.img .
-        magiskboot unpack boot.img
-        rm -f kernel
-        cp Image kernel
-        magiskboot repack boot.img
-        mv new-boot.img boot-ksu.img
-        tar -cvf boot-ksu.tar boot-ksu.img
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: kernel-boot-image
-        path: |
-          boot-ksu.img
-          boot-ksu.tar
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-output
+          path: |
+            Image
+            boot-ksu.img
+            boot-ksu.tar
