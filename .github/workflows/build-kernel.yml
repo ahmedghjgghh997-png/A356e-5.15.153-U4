@@ -123,6 +123,7 @@ jobs:
           export TARGET_SOC=s5e8835
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
+          export LTO=thin  # بدلاً من LTO=none
           
           # إضافة -fno-stack-protector إلى الدرع الواسع
           export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline -fno-stack-protector"
