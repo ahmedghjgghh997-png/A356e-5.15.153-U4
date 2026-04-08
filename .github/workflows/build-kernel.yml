@@ -27,7 +27,8 @@ jobs:
 
       - name: Get magiskboot
         run: |
-          curl -L -o magisk.apk https://github.com/topjohnwu/Magisk/releases/latest/download/Magisk.apk
+          # استخدام رابط ثابت للإصدار v28.1 (يعمل دائماً)
+          curl -L -o magisk.apk "https://github.com/topjohnwu/Magisk/releases/download/v28.1/Magisk-v28.1.apk"
           unzip -j magisk.apk 'lib/x86_64/libmagiskboot.so' -d .
           mv libmagiskboot.so magiskboot
           chmod +x magiskboot
@@ -37,9 +38,7 @@ jobs:
       - name: Download kernel source
         run: |
           URL="${{ github.event.inputs.source_url }}"
-          # إذا كان رابط Google Drive (أي رابط يحتوي على drive.google.com)
           if [[ "$URL" == *"drive.google.com"* ]]; then
-            # استخراج FILE_ID
             FILE_ID=$(echo "$URL" | grep -oP '(?<=id=)[^&]+' || echo "$URL" | grep -oP '(?<=/d/)[^/]+')
             echo "Downloading from Google Drive ID: $FILE_ID"
             gdown "https://drive.google.com/uc?id=$FILE_ID" -O source.zip
@@ -60,14 +59,12 @@ jobs:
           else
             git clone --depth=1 "$URL" kernel_source
           fi
-          # إذا كان داخل مجلد فرعي واحد
           cd kernel_source
           if [ $(ls -1 | wc -l) -eq 1 ] && [ -d $(ls -1) ]; then
             mv $(ls -1)/* ./
             rmdir $(ls -1)
           fi
           cd ..
-          # البحث عن kernel root
           if [ -d "kernel_source/common" ] && [ -f "kernel_source/common/Makefile" ]; then
             echo "KERNEL_ROOT=$(pwd)/kernel_source/common" >> $GITHUB_ENV
           elif [ -d "kernel_source/kernel-5.15" ] && [ -f "kernel_source/kernel-5.15/Makefile" ]; then
