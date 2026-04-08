@@ -7,7 +7,7 @@ on:
         description: 'رابط السورس (GitHub repo, Google Drive, أو رابط مباشر لملف مضغوط)'
         required: true
       boot_img_url:
-        description: 'رابط مباشر لـ boot.img (اختياري)'
+        description: 'رابط مباشر لـ boot.img (اتركه فارغاً لاستخدام AnyKernel3)'
         required: false
 
 jobs:
@@ -20,10 +20,12 @@ jobs:
           sudo apt install -y git device-tree-compiler lz4 xz-utils zlib1g-dev openjdk-17-jdk \
             gcc g++ python3 python-is-python3 p7zip-full android-sdk-libsparse-utils erofs-utils \
             build-essential zip curl libc6-dev libncurses-dev bc make cpio kmod openssl \
-            libelf-dev libssl-dev zstd rsync wget patch unzip
+            libelf-dev libssl-dev zstd rsync wget patch unzip dwarves
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
           pip3 install gdown
+          # تأكيد وجود pahole
+          sudo apt install -y pahole || sudo ln -s /usr/bin/pahole /usr/local/bin/pahole
 
       - name: Get magiskboot
         run: |
@@ -94,12 +96,8 @@ jobs:
       - name: Patch source code for typedef redefinition
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
-          # تعطيل التعريف المكرر في ملف kzt_common.h
           if [ -f "security/kzt/kzt_common.h" ]; then
-            echo "Patching security/kzt/kzt_common.h"
-            sed -i 's/typedef unsigned int u32;/\/\/ typedef unsigned int u32; \/\/ disabled by patch/g' security/kzt/kzt_common.h
-          else
-            echo "Warning: security/kzt/kzt_common.h not found"
+            sed -i 's/typedef unsigned int u32;/\/\/ typedef unsigned int u32; \/\/ disabled/g' security/kzt/kzt_common.h
           fi
 
       - name: Setup toolchains
@@ -127,7 +125,6 @@ jobs:
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
           
-          # الدرع الواسع من سكريبت المستخدم (يثبط كل التحذيرات ويحول الأخطاء إلى تحذيرات)
           export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline"
           export KCFLAGS="$SHIELD_FLAGS"
           export KCPPFLAGS="-Wno-error"
@@ -152,13 +149,14 @@ jobs:
           scripts/config --file .config -d CONFIG_MODULE_SIG
           scripts/config --file .config -d CONFIG_MODULE_SIG_FORCE
           scripts/config --file .config --set-str CONFIG_LOCALVERSION "-KernelSU"
+          # تعطيل BTF لتجنب الحاجة إلى pahole (إذا لم يتم تثبيته)
+          scripts/config --file .config -d CONFIG_DEBUG_INFO_BTF
           
-          # بناء مع الدرع الواسع
-          make -j$(nproc) ARCH=arm64 Image KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="-Wno-error"
+          make -j$(nproc) Image KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="-Wno-error"
           
-          cp arch/arm64/boot/Image $GITHUB_WORKSPACE/
+          cp arch/arm64/boot/Image $GITHUB_WORKSPACE/Image
 
-      - name: Download and repack boot.img
+      - name: Create boot.img (if boot.img URL provided)
         if: github.event.inputs.boot_img_url != ''
         run: |
           URL="${{ github.event.inputs.boot_img_url }}"
@@ -174,6 +172,18 @@ jobs:
           magiskboot repack boot.img
           mv new-boot.img boot-ksu.img
           tar -cf boot-ksu.tar boot-ksu.img
+          echo "BOOT_IMG_CREATED=true" >> $GITHUB_ENV
+
+      - name: Create AnyKernel3.zip (if no boot.img URL)
+        if: github.event.inputs.boot_img_url == ''
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+          cp $GITHUB_WORKSPACE/Image AnyKernel3/
+          cd AnyKernel3
+          zip -r9 ../AnyKernel3-$(date +%Y%m%d-%H%M%S).zip . -x ".git*" "README.md" "*.zip"
+          cd ..
+          echo "ANY_KERNEL_ZIP=$(ls AnyKernel3-*.zip)" >> $GITHUB_ENV
+          cp *.zip $GITHUB_WORKSPACE/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -183,3 +193,4 @@ jobs:
             Image
             boot-ksu.img
             boot-ksu.tar
+            *.zip
