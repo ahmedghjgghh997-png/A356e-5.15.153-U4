@@ -1,12 +1,11 @@
 #!/bin/bash
-# build_a35_ksu.sh - Samsung A35 (SM-A356E) GKI 2.0 + KernelSU
-# يبني الكيرنال، يعطل حماية سامسونج، وينتج boot.img وملف Odin
+# build_a35_ksu.sh - Samsung A35 (SM-A356E) GKI 2.0 + KernelSU + Clang fixes
 
 set -e
 
 # ========== الألوان ==========
 RED='\033[0;31m'
-GREEN='\0;32m'
+GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
@@ -68,7 +67,7 @@ fi
 echo -e "${GREEN}[✓] Kernel root: $KERNEL_ROOT${NC}"
 cd "$KERNEL_ROOT"
 
-# ========== تثبيت التبعيات (مرة واحدة) ==========
+# ========== تثبيت التبعيات ==========
 if [ "$SKIP_DEPS" = false ] && [ ! -f "/tmp/deps_installed" ]; then
     echo "[1/9] تثبيت التبعيات..."
     sudo apt update
@@ -88,6 +87,7 @@ if [ "$SKIP_DEPS" = false ] && [ ! -f "/tmp/deps_installed" ]; then
     chmod +x magiskboot
     sudo cp magiskboot /usr/local/bin/
     rm -f magisk.apk
+
     touch /tmp/deps_installed
     echo -e "${GREEN}[✓] التبعيات مثبتة${NC}"
 fi
@@ -99,9 +99,9 @@ echo "[2/9] التحقق من وجود toolchains..."
 if [ ! -d "$TOOLCHAIN_DIR/clang" ] || [ ! -d "$TOOLCHAIN_DIR/gcc" ]; then
     echo "    تحميل clang و gcc..."
     cd "$TOOLCHAIN_DIR"
-    wget -q --show-progress https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz
-    mkdir clang && cd clang && tar -xzf ../clang-r450784d.tar.gz && cd ..
-    wget -q --show-progress https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+    wget -q --show-progress https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/clang-r450784e.tar.gz
+    mkdir clang && cd clang && tar -xf ../clang-r450784e.tar.gz && cd ..
+    wget -q --show-progress https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
     tar -xf arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
     mv arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu gcc
     cd "$KERNEL_ROOT"
@@ -123,6 +123,10 @@ export TARGET_SOC="s5e8835"
 export PLATFORM_VERSION="15"
 export ANDROID_MAJOR_VERSION="v"
 
+# أعلام Clang لتجنب أخطاء تعريفات سامسونج
+export KBUILD_CFLAGS="$KBUILD_CFLAGS -Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end"
+export KBUILD_CFLAGS_MODULE="$KBUILD_CFLAGS_MODULE -Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end"
+
 # مجلد الإخراج
 if [ "$USE_OUT_DIR" = true ]; then
     OUT_DIR="$KERNEL_ROOT/out"
@@ -137,7 +141,7 @@ BUILD_DIR="$SCRIPT_DIR/build"
 STOCK_DIR="$SCRIPT_DIR/stock"
 mkdir -p "$BUILD_DIR" "$STOCK_DIR"
 
-# ========== إنشاء custom.config لتعطيل الحماية ==========
+# ========== إنشاء custom.config ==========
 echo "[3/9] إنشاء custom.config لتعطيل حماية سامسونج..."
 CUSTOM_CONFIG="$KERNEL_ROOT/custom.config"
 cat > "$CUSTOM_CONFIG" << 'EOF'
@@ -152,7 +156,7 @@ CONFIG_PROCA=n
 CONFIG_FIVE=n
 EOF
 
-# ========== stock_defconfig لإخفاء الرسالة ==========
+# ========== stock_defconfig ==========
 ORIG_DEFCONFIG="$KERNEL_ROOT/arch/arm64/configs/s5e8835-a35xjvxx_defconfig"
 if [ -f "$ORIG_DEFCONFIG" ] && [ ! -f "$KERNEL_ROOT/stock_defconfig" ]; then
     cp "$ORIG_DEFCONFIG" "$KERNEL_ROOT/stock_defconfig"
@@ -176,7 +180,7 @@ for cfg in common.config ksu.config custom.config; do
     fi
 done
 
-# ========== تنظيف إذا طلب ==========
+# ========== تنظيف ==========
 if [ "$CLEAN_BUILD" = true ]; then
     echo "[5/9] تنظيف البناء السابق..."
     if [ "$USE_OUT_DIR" = true ]; then
@@ -190,13 +194,11 @@ fi
 echo "[6/9] تجهيز .config باستخدام: $DEFCONFIG_LIST"
 make $MAKE_OUT ARCH=arm64 $DEFCONFIG_LIST
 
-# دمج custom.config
 if [ -f "$CUSTOM_CONFIG" ]; then
     scripts/kconfig/merge_config.sh -m -O "$OUT_DIR" "$OUT_DIR/.config" "$CUSTOM_CONFIG" 2>/dev/null || \
     scripts/kconfig/merge_config.sh -m "$OUT_DIR/.config" "$CUSTOM_CONFIG"
 fi
 
-# تعطيل التوقيعات و CRC
 scripts/config --file "$OUT_DIR/.config" -d CONFIG_MODULE_SIG
 scripts/config --file "$OUT_DIR/.config" -d CONFIG_MODULE_SIG_FORCE
 scripts/config --file "$OUT_DIR/.config" -d CONFIG_SYSTEM_TRUSTED_KEYS
@@ -212,7 +214,7 @@ fi
 
 # ========== بناء الكيرنال ==========
 echo "[8/9] بناء الكيرنال (قد يستغرق وقتاً)..."
-make $MAKE_OUT ARCH=arm64 -j$(nproc) Image
+make $MAKE_OUT ARCH=arm64 -j$(nproc) Image KBUILD_CFLAGS="-Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end"
 
 if [ -f "$OUT_DIR/arch/arm64/boot/Image" ]; then
     cp "$OUT_DIR/arch/arm64/boot/Image" "$BUILD_DIR/"
