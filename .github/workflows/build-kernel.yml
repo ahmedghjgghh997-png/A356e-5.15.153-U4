@@ -47,29 +47,18 @@ jobs:
           fi
           
           FILE_TYPE=$(file -b --mime-type source.file)
-          echo "File type: $FILE_TYPE"
           mkdir -p kernel_source
-          
           case "$FILE_TYPE" in
-            application/zip)
-              unzip -q source.file -d kernel_source
-              ;;
-            application/x-tar|application/x-gzip|application/gzip)
-              tar -xf source.file -C kernel_source
-              ;;
-            application/x-xz)
-              tar -xJf source.file -C kernel_source
-              ;;
-            application/x-bzip2)
-              tar -xjf source.file -C kernel_source
-              ;;
+            application/zip) unzip -q source.file -d kernel_source ;;
+            application/x-tar|application/x-gzip|application/gzip) tar -xf source.file -C kernel_source ;;
+            application/x-xz) tar -xJf source.file -C kernel_source ;;
+            application/x-bzip2) tar -xjf source.file -C kernel_source ;;
             *)
               if tar -xf source.file -C kernel_source 2>/dev/null; then
-                echo "Extracted with tar (fallback)"
+                echo "Extracted with tar"
               elif unzip -q source.file -d kernel_source 2>/dev/null; then
-                echo "Extracted with unzip (fallback)"
+                echo "Extracted with unzip"
               else
-                echo "Unknown format, copying raw file"
                 cp source.file kernel_source/
               fi
               ;;
@@ -78,9 +67,7 @@ jobs:
           
           cd kernel_source
           if [ $(ls -1 | wc -l) -eq 1 ] && [ -d $(ls -1) ]; then
-            SUBDIR=$(ls -1)
-            mv $SUBDIR/* ./
-            rmdir $SUBDIR
+            SUBDIR=$(ls -1); mv $SUBDIR/* ./; rmdir $SUBDIR
           fi
           cd ..
           
@@ -92,7 +79,7 @@ jobs:
             echo "KERNEL_ROOT=$(pwd)/kernel_source" >> $GITHUB_ENV
           fi
 
-      - name: Patch source code for typedef redefinition
+      - name: Patch typedef redefinition
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           if [ -f "security/kzt/kzt_common.h" ]; then
@@ -123,9 +110,8 @@ jobs:
           export TARGET_SOC=s5e8835
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
-          export LTO=thin  # بدلاً من LTO=none
-          
-          # إضافة -fno-stack-protector إلى الدرع الواسع
+          export LTO=none
+
           export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline -fno-stack-protector"
           export KCFLAGS="$SHIELD_FLAGS"
           export KCPPFLAGS="-Wno-error"
@@ -148,7 +134,11 @@ jobs:
           make $DEFCONFIG
           scripts/kconfig/merge_config.sh .config custom.config
           
-          # تعطيل Stack Protector و BTF
+          # تعطيل LTO بشكل قاطع
+          scripts/config --file .config -d CONFIG_LTO_CLANG
+          scripts/config --file .config -d CONFIG_LTO_CLANG_THIN
+          scripts/config --file .config -d CONFIG_LTO_CLANG_FULL
+          scripts/config --file .config -e CONFIG_LTO_NONE
           scripts/config --file .config -d CONFIG_STACKPROTECTOR
           scripts/config --file .config -d CONFIG_STACKPROTECTOR_STRONG
           scripts/config --file .config -d CONFIG_STACKPROTECTOR_PER_TASK
@@ -158,10 +148,9 @@ jobs:
           scripts/config --file .config --set-str CONFIG_LOCALVERSION "-KernelSU"
           
           make -j$(nproc) Image KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="-Wno-error"
-          
           cp arch/arm64/boot/Image $GITHUB_WORKSPACE/Image
 
-      - name: Create boot.img (if boot.img URL provided)
+      - name: Create boot.img (if URL provided)
         if: github.event.inputs.boot_img_url != ''
         run: |
           URL="${{ github.event.inputs.boot_img_url }}"
@@ -177,9 +166,8 @@ jobs:
           magiskboot repack boot.img
           mv new-boot.img boot-ksu.img
           tar -cf boot-ksu.tar boot-ksu.img
-          echo "BOOT_IMG_CREATED=true" >> $GITHUB_ENV
 
-      - name: Create AnyKernel3.zip (if no boot.img URL)
+      - name: Create AnyKernel3.zip (if no boot.img)
         if: github.event.inputs.boot_img_url == ''
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
@@ -187,7 +175,6 @@ jobs:
           cd AnyKernel3
           zip -r9 ../AnyKernel3-$(date +%Y%m%d-%H%M%S).zip . -x ".git*" "README.md" "*.zip"
           cd ..
-          echo "ANY_KERNEL_ZIP=$(ls AnyKernel3-*.zip)" >> $GITHUB_ENV
           cp *.zip $GITHUB_WORKSPACE/
 
       - name: Upload artifacts
