@@ -37,26 +37,16 @@ jobs:
       - name: Download kernel source (smart)
         run: |
           URL="${{ github.event.inputs.source_url }}"
-          # دالة لتحويل رابط Google Drive إلى رابط مباشر
-          get_gdrive_direct() {
-            local url="$1"
-            local file_id=$(echo "$url" | grep -o 'id=[^&]*' | cut -d= -f2)
-            if [ -z "$file_id" ]; then
-              file_id=$(echo "$url" | grep -o 'file/d/[^/]*' | cut -d/ -f3)
-            fi
-            echo "https://drive.google.com/uc?export=download&id=$file_id"
-          }
-          # التحقق إذا كان الرابط من Google Drive
+          # تحويل رابط Google Drive
           if [[ "$URL" == *"drive.google.com"* ]]; then
-            echo "رابط Google Drive detected. Downloading..."
-            DIRECT_URL=$(get_gdrive_direct "$URL")
-            gdown --fuzzy "$DIRECT_URL" -O source.zip
+            FILE_ID=$(echo "$URL" | grep -o 'id=[^&]*' | cut -d= -f2)
+            [ -z "$FILE_ID" ] && FILE_ID=$(echo "$URL" | grep -o 'file/d/[^/]*' | cut -d/ -f3)
+            echo "تحميل من Google Drive ID: $FILE_ID"
+            gdown --fuzzy "https://drive.google.com/uc?id=$FILE_ID" -O source.zip
             mkdir -p kernel_source
             unzip -q source.zip -d kernel_source
             rm source.zip
-          # التحقق إذا كان الرابط ينتهي بامتداد مضغوط
           elif [[ "$URL" =~ \.(zip|tar|tar.gz|tgz|tar.xz|bz2)$ ]]; then
-            echo "رابط مباشر لملف مضغوط. Downloading..."
             wget -O source.archive "$URL"
             mkdir -p kernel_source
             if [[ "$URL" == *.zip ]]; then
@@ -65,16 +55,14 @@ jobs:
               tar -xzf source.archive -C kernel_source
             elif [[ "$URL" == *.tar.xz ]]; then
               tar -xf source.archive -C kernel_source
-            elif [[ "$URL" == *.tar ]]; then
+            else
               tar -xf source.archive -C kernel_source
             fi
             rm source.archive
           else
-            # محاولة git clone
-            echo "محاولة git clone..."
             git clone --depth=1 "$URL" kernel_source
           fi
-          # بعد فك الضغط، قد يكون هناك مجلد فرعي واحد، ننقل محتوياته إلى الأعلى
+          # رفع المجلدات الفرعية إذا وجدت
           cd kernel_source
           if [ $(ls -1 | wc -l) -eq 1 ] && [ -d $(ls -1) ]; then
             SUBDIR=$(ls -1)
@@ -82,7 +70,7 @@ jobs:
             rmdir $SUBDIR
           fi
           cd ..
-          # البحث عن kernel root (common/ أو kernel-*/)
+          # البحث عن kernel root
           if [ -d "kernel_source/common" ] && [ -f "kernel_source/common/Makefile" ]; then
             echo "KERNEL_ROOT=$(pwd)/kernel_source/common" >> $GITHUB_ENV
           elif [ -d "kernel_source/kernel-5.15" ] && [ -f "kernel_source/kernel-5.15/Makefile" ]; then
@@ -116,7 +104,6 @@ jobs:
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
 
-          # تعطيل حماية سامسونج
           cat > custom.config << EOF
           CONFIG_UH=n
           CONFIG_UH_RKP=n
@@ -129,7 +116,6 @@ jobs:
           CONFIG_FIVE=n
           EOF
 
-          # البحث عن defconfig
           DEFCONFIG=$(ls arch/arm64/configs/*a35*defconfig 2>/dev/null | head -1 | xargs basename)
           if [ -z "$DEFCONFIG" ]; then
             DEFCONFIG=$(ls arch/arm64/configs/*_defconfig | head -1 | xargs basename)
