@@ -1,14 +1,14 @@
-name: Build Kernel with KernelSU
+name: Build Kernel with KernelSU for A35
 
 on:
   workflow_dispatch:
     inputs:
-      kernel_source_url:
-        description: 'رابط سورس الكيرنال (git clone)'
+      kernel_repo:
+        description: 'رابط مستودع سورس الكيرنال (Git clone)'
         required: true
-        default: 'https://github.com/Samsung/exynos_kernel.git'
+        default: 'https://github.com/your-username/your-kernel-source'
       boot_img_url:
-        description: 'رابط مباشر لـ boot.img الأصلي (اختياري)'
+        description: 'رابط مباشر لملف boot.img الأصلي (اختياري)'
         required: false
         default: ''
 
@@ -18,15 +18,13 @@ jobs:
     steps:
       - name: Checkout kernel source
         run: |
-          git clone --depth=1 ${{ github.event.inputs.kernel_source_url }} kernel
+          git clone --depth=1 ${{ github.event.inputs.kernel_repo }} kernel
           cd kernel
-          # إذا كان السورس يحتوي على مجلد common أو kernel-5.15، ندخل إليه
+          # البحث عن kernel root (common/ أو kernel-*/)
           if [ -d "common" ] && [ -f "common/Makefile" ]; then
-            cd common
-            echo "KERNEL_ROOT=$(pwd)" >> $GITHUB_ENV
+            echo "KERNEL_ROOT=$(pwd)/common" >> $GITHUB_ENV
           elif [ -d "kernel-5.15" ] && [ -f "kernel-5.15/Makefile" ]; then
-            cd kernel-5.15
-            echo "KERNEL_ROOT=$(pwd)" >> $GITHUB_ENV
+            echo "KERNEL_ROOT=$(pwd)/kernel-5.15" >> $GITHUB_ENV
           else
             echo "KERNEL_ROOT=$(pwd)" >> $GITHUB_ENV
           fi
@@ -49,23 +47,24 @@ jobs:
           mv libmagiskboot.so magiskboot
           chmod +x magiskboot
           sudo cp magiskboot /usr/local/bin/
+          rm -f magisk.apk
 
-      - name: Setup toolchains
+      - name: Setup toolchains (Clang + GCC)
         run: |
-          mkdir -p toolchains && cd toolchains
-          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz
+          mkdir -p $HOME/toolchains
+          cd $HOME/toolchains
+          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz
           mkdir clang && cd clang && tar -xzf ../clang-r450784d.tar.gz && cd ..
-          wget https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+          wget -q https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
           mv arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu gcc
-          cd ..
+          echo "TOOLCHAIN_DIR=$HOME/toolchains" >> $GITHUB_ENV
 
       - name: Build kernel
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           export ARCH=arm64
-          export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
-          export PATH="$GITHUB_WORKSPACE/toolchains/gcc/bin:$PATH"
+          export PATH=${{ env.TOOLCHAIN_DIR }}/clang/bin:${{ env.TOOLCHAIN_DIR }}/gcc/bin:$PATH
           export CROSS_COMPILE=aarch64-linux-android-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
@@ -76,7 +75,7 @@ jobs:
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
 
-          # إنشاء custom.config لتعطيل الحماية
+          # تعطيل حماية سامسونج
           cat > custom.config << EOF
           CONFIG_UH=n
           CONFIG_UH_RKP=n
@@ -89,23 +88,47 @@ jobs:
           CONFIG_FIVE=n
           EOF
 
-          # استخدام defconfig
-          make s5e8835-a35xjvxx_defconfig
+          # استخدم defconfig جهاز A35 (عدل الاسم لو مختلف)
+          DEFCONFIG_NAME="s5e8835-a35xjvxx_defconfig"
+          if [ ! -f "arch/arm64/configs/$DEFCONFIG_NAME" ]; then
+            echo "⚠️ ال defconfig $DEFCONFIG_NAME غير موجود، استخدم أول defconfig موجود"
+            DEFCONFIG_NAME=$(ls arch/arm64/configs/*_defconfig | head -1 | xargs basename)
+          fi
+          make $DEFCONFIG_NAME
           scripts/kconfig/merge_config.sh .config custom.config
           scripts/config --file .config -d CONFIG_MODULE_SIG
           scripts/config --file .config -d CONFIG_MODULE_SIG_FORCE
           scripts/config --file .config --set-str CONFIG_LOCALVERSION "-KernelSU"
-
+          
           make -j$(nproc) Image
           cp arch/arm64/boot/Image $GITHUB_WORKSPACE/Image
 
-      - name: Create boot.img (if boot.img URL provided)
+      - name: Download boot.img (if URL provided)
         if: github.event.inputs.boot_img_url != ''
         run: |
-          wget -O boot.img "${{ github.event.inputs.boot_img_url }}"
+          URL="${{ github.event.inputs.boot_img_url }}"
+          # دعم روابط Google Drive المباشرة
+          if [[ "$URL" == *"drive.google.com"* ]]; then
+            FILE_ID=$(echo "$URL" | grep -o 'id=[^&]*' | cut -d= -f2)
+            if [ -z "$FILE_ID" ]; then
+              FILE_ID=$(echo "$URL" | grep -o 'file/d/[^/]*' | cut -d/ -f3)
+            fi
+            echo "تحميل من Google Drive ID: $FILE_ID"
+            gdown --fuzzy "https://drive.google.com/uc?id=$FILE_ID" -O boot.img
+          else
+            wget -O boot.img "$URL"
+          fi
+          # تثبيت gdown لو لزم
+          if ! command -v gdown &> /dev/null; then
+            pip3 install gdown
+          fi
+
+      - name: Create boot.img (if boot.img available)
+        if: github.event.inputs.boot_img_url != '' && steps.download-boot-img.outcome == 'success'
+        run: |
           magiskboot unpack boot.img
           rm -f kernel
-          cp Image kernel
+          cp $GITHUB_WORKSPACE/Image kernel
           magiskboot repack boot.img
           mv new-boot.img boot-ksu.img
           tar -cvf boot-ksu.tar boot-ksu.img
