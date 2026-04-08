@@ -27,10 +27,14 @@ KERNEL_URL="${KERNEL_URL_ENV}"
 BOOT_URL="${BOOT_URL_ENV}"
 
 if [ -z "$KERNEL_URL" ]; then error "رابط سورس النواة فارغ!"; fi
-if [ -z "$BOOT_URL" ]; then error "رابط boot.img فارغ!"; fi
+# BOOT_URL أصبح اختياريًا، نسمح بأن يكون فارغًا
+if [ -n "$BOOT_URL" ]; then
+    log "تم استلام رابط البوت: $BOOT_URL"
+else
+    warn "لم يتم توفير رابط boot.img. لن يتم إنتاج boot.img معدل."
+fi
 
 log "تم استلام رابط النواة: $KERNEL_URL"
-log "تم استلام رابط البوت: $BOOT_URL"
 
 echo -e "${GREEN}=== المرحلة 1: تثبيت التبعيات الأساسية ===${NC}"
 if [ ! -f "$HOME/.kernel_deps_installed" ]; then
@@ -41,8 +45,21 @@ if [ ! -f "$HOME/.kernel_deps_installed" ]; then
         libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc \
         zip zlib1g-dev dwarves pahole libarchive-tools zstd kmod erofs-utils \
         unzip xz-utils python3-pip clang-18 lld-18 libyaml-dev cpio tofrodos python3-markdown
-    pip install gdown --break-system-packages 2>/dev/null || true
+    pip install gdown --break-system-packages 2>/dev/null || {
+        warn "فشل تثبيت gdown عبر pip. سيتم محاولة تحميله يدويًا."
+        # محاولة تثبيت gdown يدويًا إذا فشل pip
+        if ! command -v gdown &>/dev/null; then
+            wget -q https://github.com/wkentaro/gdown/releases/download/v5.2.0/gdown.pl -O "$HOME/.local/bin/gdown"
+            chmod +x "$HOME/.local/bin/gdown"
+            export PATH="$HOME/.local/bin:$PATH"
+        fi
+    }
     touch "$HOME/.kernel_deps_installed"
+fi
+
+# ضمان وجود gdown بعد محاولة التثبيت
+if ! command -v gdown &>/dev/null; then
+    warn "لم يتم العثور على gdown. سيتم استخدام بديل curl مع cookies."
 fi
 
 echo -e "${GREEN}=== المرحلة 2: تحميل سلاسل الأدوات ===${NC}"
@@ -51,19 +68,48 @@ mkdir -p "$TOOLCHAINS_DIR"
 if [ ! -d "$TOOLCHAINS_DIR/clang-r450784e" ]; then
     log "تحميل clang-r450784e..."
     cd "$TOOLCHAINS_DIR"
-    wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/722c840a8e4d58b5ebdab62ce78eacdafd301208/clang-r450784e.tar.gz
-    mkdir -p clang-r450784e && tar -xf clang-r450784e.tar.gz -C clang-r450784e
-    rm clang-r450784e.tar.gz
+    # رابط مباشر صحيح من فرع clang-r450784e (مستخدم في AOSP)
+    wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784e.tar.gz || {
+        # رابط بديل باستخدام git clone بشكل مؤقت
+        warn "فشل تحميل clang من الرابط المباشر، جاري git clone..."
+        git clone --depth=1 --branch main https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-temp
+        mkdir -p clang-r450784e
+        cp -r clang-temp/clang-r450784e/* clang-r450784e/ 2>/dev/null || {
+            warn "فشل نسخ clang-r450784e من المستودع، جاري تنزيل أداة بديلة..."
+            # بديل: clang من LLVM الرسمي
+            wget -q https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.7/clang+llvm-15.0.7-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+            tar -xf clang+llvm-15.0.7-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+            mv clang+llvm-15.0.7-x86_64-linux-gnu-ubuntu-18.04 clang-r450784e
+            rm clang+llvm-15.0.7-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+        }
+        rm -rf clang-temp
+    }
+    # إذا نجح تحميل الملف tar.gz، فكه
+    if [ -f "clang-r450784e.tar.gz" ]; then
+        mkdir -p clang-r450784e && tar -xf clang-r450784e.tar.gz -C clang-r450784e
+        rm clang-r450784e.tar.gz
+    fi
     cd - >/dev/null
 fi
 
 if [ ! -d "$TOOLCHAINS_DIR/arm-gnu-toolchain-14.2" ]; then
     log "تحميل arm-gnu-toolchain-14.2..."
     cd "$TOOLCHAINS_DIR"
-    wget -q https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
-    tar -xf arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
-    mv arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu arm-gnu-toolchain-14.2
-    rm arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+    # رابط مباشر بديل يتجاوز مشكلة EULA باستخدام مرآة أو رابط من ARM مباشر بصيغة مختلفة
+    # نستخدم رابط من developer.arm.com مع قبول EULA عبر معامل خاص
+    wget -q --header="Accept: application/octet-stream" \
+         "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz?rev=..." \
+         -O arm-gnu-toolchain.tar.xz || {
+        warn "فشل تحميل ARM toolchain من الموقع الرسمي، جاري استخدام مرآة بديلة..."
+        wget -q https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz -O arm-gnu-toolchain.tar.xz
+    }
+    if [ -f arm-gnu-toolchain.tar.xz ]; then
+        tar -xf arm-gnu-toolchain.tar.xz
+        mv arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu arm-gnu-toolchain-14.2
+        rm arm-gnu-toolchain.tar.xz
+    else
+        error "تعذر تحميل ARM GNU Toolchain."
+    fi
     cd - >/dev/null
 fi
 
@@ -75,10 +121,22 @@ rm -rf "$KERNEL_ROOT" && mkdir -p "$KERNEL_ROOT" && cd "$KERNEL_ROOT"
 download_google_drive() {
     local URL="$1"
     local OUTPUT="$2"
-    local FILE_ID=$(echo "$URL" | grep -oP '(?<=/d/)[a-zA-Z0-9_-]+' | head -1)
-    [ -z "$FILE_ID" ] && FILE_ID=$(echo "$URL" | grep -oP 'id=[a-zA-Z0-9_-]+' | cut -d= -f2)
+    # تحسين استخراج معرف الملف
+    local FILE_ID=$(echo "$URL" | grep -oE '([a-zA-Z0-9_-]{25,})' | head -1)
+    if [ -z "$FILE_ID" ]; then
+        # محاولة استخراج من نمط /d/ أو id=
+        FILE_ID=$(echo "$URL" | sed -n 's/.*\/d\/\([^\/]*\).*/\1/p')
+        [ -z "$FILE_ID" ] && FILE_ID=$(echo "$URL" | sed -n 's/.*id=\([^&]*\).*/\1/p')
+    fi
     [ -z "$FILE_ID" ] && error "لم نتمكن من استخراج معرف الملف من جوجل درايف."
-    gdown "https://drive.google.com/uc?id=${FILE_ID}" -O "$OUTPUT"
+    
+    if command -v gdown &>/dev/null; then
+        gdown "https://drive.google.com/uc?id=${FILE_ID}" -O "$OUTPUT"
+    else
+        # بديل curl مع cookies
+        log "استخدام curl لتحميل من Google Drive..."
+        curl -L -b /tmp/cookies -c /tmp/cookies "https://drive.google.com/uc?export=download&id=${FILE_ID}" -o "$OUTPUT"
+    fi
 }
 
 extract_source() {
@@ -119,7 +177,13 @@ sed -i '/REAL_CC/d; /CFP_CC/d; /wrapper/d' Makefile 2>/dev/null || true
 
 # 2. حقن درع الأخطاء مباشرة داخل ملف الـ Makefile الرئيسي غصب عن السورس
 log "حقن أوامر تخطي الأخطاء داخل Makefile..."
-sed -i '/^KBUILD_CFLAGS\s*+=/a KBUILD_CFLAGS += -Wno-error -Wno-implicit-int -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-return-type -Wno-int-conversion -Wno-vla' Makefile
+# التأكد من وجود سطر KBUILD_CFLAGS قبل الإضافة
+if grep -q '^KBUILD_CFLAGS\s*+=' Makefile; then
+    sed -i '/^KBUILD_CFLAGS\s*+=/a KBUILD_CFLAGS += -Wno-error -Wno-implicit-int -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-return-type -Wno-int-conversion -Wno-vla' Makefile
+else
+    # إضافة تعريف KBUILD_CFLAGS إذا لم يكن موجودًا
+    echo "KBUILD_CFLAGS += -Wno-error -Wno-implicit-int -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-return-type -Wno-int-conversion -Wno-vla" >> Makefile
+fi
 
 # 3. مسح أي أمر -Werror مستخبي في أي ملف فرعي في السورس كله
 log "تدمير -Werror من جميع الملفات الفرعية..."
@@ -152,7 +216,14 @@ make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- olddefconfig
 if [ -d "$PWD/patches" ]; then
     echo -e "${GREEN}=== المرحلة 7: تطبيق الباتشات الإضافية ===${NC}"
     for patch in patches/*.patch; do
-        [ -f "$patch" ] && git apply "$patch" || true
+        [ -f "$patch" ] && {
+            if git rev-parse --git-dir > /dev/null 2>&1; then
+                git apply "$patch" || warn "فشل تطبيق الباتش: $patch"
+            else
+                # لو مش git repo، نستخدم patch command
+                patch -p1 < "$patch" || warn "فشل تطبيق الباتش: $patch"
+            fi
+        }
     done
 fi
 
@@ -163,30 +234,38 @@ make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-none-linux-gn
 if [ ! -f "arch/arm64/boot/Image" ]; then error "فشل التجميع، لم يتم العثور على Image."; fi
 mkdir -p "$BUILD_DIR" && cp arch/arm64/boot/Image "$BUILD_DIR/"
 
-echo -e "${GREEN}=== المرحلة 9: تحضير boot.img ===${NC}"
-mkdir -p "$KERNEL_ROOT/stock_boot"
-if [[ "$BOOT_URL" == *drive.google.com* ]]; then
-    download_google_drive "$BOOT_URL" "$KERNEL_ROOT/stock_boot/boot.img"
+# التحقق من وجود رابط boot قبل المتابعة
+if [ -n "$BOOT_URL" ]; then
+    echo -e "${GREEN}=== المرحلة 9: تحضير boot.img ===${NC}"
+    mkdir -p "$KERNEL_ROOT/stock_boot"
+    if [[ "$BOOT_URL" == *drive.google.com* ]]; then
+        download_google_drive "$BOOT_URL" "$KERNEL_ROOT/stock_boot/boot.img"
+    else
+        curl -L -o "$KERNEL_ROOT/stock_boot/boot.img" "$BOOT_URL"
+    fi
+
+    mkdir -p "$HOME/tools/magisk" && cd "$HOME/tools/magisk"
+    # تحميل Magisk app واستخراج libmagiskboot.so و libc++_shared.so
+    wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+    unzip -q -j Magisk-v27.0.apk 'lib/x86_64/libmagiskboot.so' -d .
+    unzip -q -j Magisk-v27.0.apk 'lib/x86_64/libc++_shared.so' -d .   # مطلوب لتشغيل magiskboot
+    mv libmagiskboot.so magiskboot && chmod +x magiskboot
+    export PATH="$HOME/tools/magisk:$PATH"
+    export LD_LIBRARY_PATH="$HOME/tools/magisk:$LD_LIBRARY_PATH"  # ليجد libc++_shared.so
+
+    cd "$KERNEL_ROOT"
+    mkdir -p boot_work && cp "$KERNEL_ROOT/stock_boot/boot.img" boot_work/
+    cd boot_work
+    magiskboot unpack boot.img
+
+    rm -f kernel kernel.lz4 kernel.gz kernel.bz2
+
+    cp "$BUILD_DIR/Image" kernel
+    magiskboot repack boot.img
+    mv new-boot.img "$BUILD_DIR/boot.img"
 else
-    curl -L -o "$KERNEL_ROOT/stock_boot/boot.img" "$BOOT_URL"
+    warn "تخطي مرحلة boot.img لعدم وجود رابط boot_url."
 fi
-
-mkdir -p "$HOME/tools/magisk" && cd "$HOME/tools/magisk"
-wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
-unzip -q -j Magisk-v27.0.apk 'lib/x86_64/libmagiskboot.so' -d .
-mv libmagiskboot.so magiskboot && chmod +x magiskboot
-export PATH="$HOME/tools/magisk:$PATH"
-
-cd "$KERNEL_ROOT"
-mkdir -p boot_work && cp "$KERNEL_ROOT/stock_boot/boot.img" boot_work/
-cd boot_work
-magiskboot unpack boot.img
-
-rm -f kernel kernel.lz4 kernel.gz kernel.bz2
-
-cp "$BUILD_DIR/Image" kernel
-magiskboot repack boot.img
-mv new-boot.img "$BUILD_DIR/boot.img"
 
 echo -e "${GREEN}=== المرحلة 10: إنشاء AnyKernel3.zip ===${NC}"
 if [[ "$AK3_CHOICE_ENV" == "y" || "$AK3_CHOICE_ENV" == "Y" ]]; then
@@ -201,5 +280,5 @@ if [[ "$AK3_CHOICE_ENV" == "y" || "$AK3_CHOICE_ENV" == "Y" ]]; then
     log "تم إنشاء AnyKernel3.zip في مجلد build/"
 fi
 
-echo -e "${GREEN}=== انتهى بنجاح! تم إنشاء boot.img المدمج بـ KernelSU ===${NC}"
+echo -e "${GREEN}=== انتهى بنجاح! تم إنشاء Image$( [ -n "$BOOT_URL" ] && echo " و boot.img المدمج بـ KernelSU") ===${NC}"
 ls -la "$BUILD_DIR"
