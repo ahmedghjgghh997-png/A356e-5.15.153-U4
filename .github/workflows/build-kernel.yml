@@ -91,6 +91,17 @@ jobs:
             echo "KERNEL_ROOT=$(pwd)/kernel_source" >> $GITHUB_ENV
           fi
 
+      - name: Patch source code for typedef redefinition
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          # تعطيل التعريف المكرر في ملف kzt_common.h
+          if [ -f "security/kzt/kzt_common.h" ]; then
+            echo "Patching security/kzt/kzt_common.h"
+            sed -i 's/typedef unsigned int u32;/\/\/ typedef unsigned int u32; \/\/ disabled by patch/g' security/kzt/kzt_common.h
+          else
+            echo "Warning: security/kzt/kzt_common.h not found"
+          fi
+
       - name: Setup toolchains
         run: |
           mkdir -p $HOME/tc
@@ -116,9 +127,10 @@ jobs:
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
           
-          # إضافة الأعلام اللازمة لتجنب أخطاء typedef وغيرها من أخطاء Clang مع كود سامسونج
-          export KBUILD_CFLAGS="$KBUILD_CFLAGS -Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end"
-          export KBUILD_CFLAGS_MODULE="$KBUILD_CFLAGS_MODULE -Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end"
+          # الدرع الواسع من سكريبت المستخدم (يثبط كل التحذيرات ويحول الأخطاء إلى تحذيرات)
+          export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline"
+          export KCFLAGS="$SHIELD_FLAGS"
+          export KCPPFLAGS="-Wno-error"
 
           cat > custom.config << EOF
           CONFIG_UH=n
@@ -141,8 +153,8 @@ jobs:
           scripts/config --file .config -d CONFIG_MODULE_SIG_FORCE
           scripts/config --file .config --set-str CONFIG_LOCALVERSION "-KernelSU"
           
-          # استخدام الأعلام مباشرة في الأمر make
-          make -j$(nproc) Image KBUILD_CFLAGS="-Wno-typedef-redefinition -Wno-gnu-variable-sized-type-not-at-end"
+          # بناء مع الدرع الواسع
+          make -j$(nproc) ARCH=arm64 Image KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="-Wno-error"
           
           cp arch/arm64/boot/Image $GITHUB_WORKSPACE/
 
