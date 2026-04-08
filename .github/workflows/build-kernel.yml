@@ -24,7 +24,6 @@ jobs:
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
           pip3 install gdown
-          # تأكيد وجود pahole
           sudo apt install -y pahole || sudo ln -s /usr/bin/pahole /usr/local/bin/pahole
 
       - name: Get magiskboot
@@ -125,7 +124,8 @@ jobs:
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
           
-          export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline"
+          # إضافة -fno-stack-protector إلى الدرع الواسع
+          export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline -fno-stack-protector"
           export KCFLAGS="$SHIELD_FLAGS"
           export KCPPFLAGS="-Wno-error"
 
@@ -146,11 +146,15 @@ jobs:
           echo "Using defconfig: $DEFCONFIG"
           make $DEFCONFIG
           scripts/kconfig/merge_config.sh .config custom.config
+          
+          # تعطيل Stack Protector و BTF
+          scripts/config --file .config -d CONFIG_STACKPROTECTOR
+          scripts/config --file .config -d CONFIG_STACKPROTECTOR_STRONG
+          scripts/config --file .config -d CONFIG_STACKPROTECTOR_PER_TASK
+          scripts/config --file .config -d CONFIG_DEBUG_INFO_BTF
           scripts/config --file .config -d CONFIG_MODULE_SIG
           scripts/config --file .config -d CONFIG_MODULE_SIG_FORCE
           scripts/config --file .config --set-str CONFIG_LOCALVERSION "-KernelSU"
-          # تعطيل BTF لتجنب الحاجة إلى pahole (إذا لم يتم تثبيته)
-          scripts/config --file .config -d CONFIG_DEBUG_INFO_BTF
           
           make -j$(nproc) Image KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="-Wno-error"
           
