@@ -3,42 +3,27 @@ name: Build Kernel with KernelSU for A35
 on:
   workflow_dispatch:
     inputs:
-      kernel_repo:
-        description: 'رابط مستودع سورس الكيرنال (Git clone)'
+      source_url:
+        description: 'رابط مباشر لملف السورس المضغوط (zip, tar, tar.gz, tar.xz) أو رابط git clone'
         required: true
-        default: 'https://github.com/your-username/your-kernel-source'
       boot_img_url:
-        description: 'رابط مباشر لملف boot.img الأصلي (اختياري)'
+        description: 'رابط مباشر لـ boot.img (اختياري)'
         required: false
-        default: ''
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout kernel source
-        run: |
-          git clone --depth=1 ${{ github.event.inputs.kernel_repo }} kernel
-          cd kernel
-          # البحث عن kernel root (common/ أو kernel-*/)
-          if [ -d "common" ] && [ -f "common/Makefile" ]; then
-            echo "KERNEL_ROOT=$(pwd)/common" >> $GITHUB_ENV
-          elif [ -d "kernel-5.15" ] && [ -f "kernel-5.15/Makefile" ]; then
-            echo "KERNEL_ROOT=$(pwd)/kernel-5.15" >> $GITHUB_ENV
-          else
-            echo "KERNEL_ROOT=$(pwd)" >> $GITHUB_ENV
-          fi
-
       - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y git device-tree-compiler lz4 xz-utils zlib1g-dev openjdk-17-jdk \
             gcc g++ python3 python-is-python3 p7zip-full android-sdk-libsparse-utils erofs-utils \
-            default-jdk gnupg flex bison gperf build-essential zip curl libc6-dev libncurses-dev \
-            libx11-dev libreadline-dev libgl1 libgl1-mesa-dev bc tofrodos make sudo grep libtinfo6 \
-            cpio kmod openssl libelf-dev pahole libssl-dev libarchive-tools zstd rsync wget patch
+            build-essential zip curl libc6-dev libncurses-dev bc make cpio kmod openssl \
+            libelf-dev libssl-dev zstd rsync wget patch unzip
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
+          pip3 install gdown
 
       - name: Get magiskboot
         run: |
@@ -49,33 +34,70 @@ jobs:
           sudo cp magiskboot /usr/local/bin/
           rm -f magisk.apk
 
-      - name: Setup toolchains (Clang + GCC)
+      - name: Download kernel source
         run: |
-          mkdir -p $HOME/toolchains
-          cd $HOME/toolchains
+          URL="${{ github.event.inputs.source_url }}"
+          # تحويل رابط Google Drive إلى رابط مباشر
+          if [[ "$URL" == *"drive.google.com"* ]]; then
+            FILE_ID=$(echo "$URL" | grep -o 'id=[^&]*' | cut -d= -f2)
+            [ -z "$FILE_ID" ] && FILE_ID=$(echo "$URL" | grep -o 'file/d/[^/]*' | cut -d/ -f3)
+            echo "تحميل من Google Drive ID: $FILE_ID"
+            gdown --fuzzy "https://drive.google.com/uc?id=$FILE_ID" -O source.zip
+          else
+            wget -O source.zip "$URL" || wget -O source.tar.gz "$URL" || wget -O source.tar.xz "$URL"
+          fi
+          # فك الضغط حسب الامتداد
+          if [ -f source.zip ]; then
+            unzip -q source.zip -d kernel_source
+          elif [ -f source.tar.gz ]; then
+            tar -xzf source.tar.gz -C kernel_source
+          elif [ -f source.tar.xz ]; then
+            tar -xf source.tar.xz -C kernel_source
+          elif [ -f source.tar ]; then
+            tar -xf source.tar -C kernel_source
+          fi
+          # نقل المحتوى من أي مجلد فرعي إلى الجذر
+          cd kernel_source
+          if [ $(ls -1 | wc -l) -eq 1 ] && [ -d $(ls -1) ]; then
+            mv $(ls -1)/* ./
+            rmdir $(ls -1)
+          fi
+          cd ..
+          # البحث عن kernel root (common/ أو kernel-*/)
+          if [ -d "kernel_source/common" ] && [ -f "kernel_source/common/Makefile" ]; then
+            echo "KERNEL_ROOT=$(pwd)/kernel_source/common" >> $GITHUB_ENV
+          elif [ -d "kernel_source/kernel-5.15" ] && [ -f "kernel_source/kernel-5.15/Makefile" ]; then
+            echo "KERNEL_ROOT=$(pwd)/kernel_source/kernel-5.15" >> $GITHUB_ENV
+          else
+            echo "KERNEL_ROOT=$(pwd)/kernel_source" >> $GITHUB_ENV
+          fi
+
+      - name: Setup toolchains
+        run: |
+          mkdir -p $HOME/tc
+          cd $HOME/tc
           wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz
-          mkdir clang && cd clang && tar -xzf ../clang-r450784d.tar.gz && cd ..
+          mkdir clang && cd clang && tar -xf ../clang-r450784d.tar.gz && cd ..
           wget -q https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
           mv arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu gcc
-          echo "TOOLCHAIN_DIR=$HOME/toolchains" >> $GITHUB_ENV
+          echo "TOOLCHAIN=$HOME/tc" >> $GITHUB_ENV
 
       - name: Build kernel
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           export ARCH=arm64
-          export PATH=${{ env.TOOLCHAIN_DIR }}/clang/bin:${{ env.TOOLCHAIN_DIR }}/gcc/bin:$PATH
+          export PATH=${{ env.TOOLCHAIN }}/clang/bin:${{ env.TOOLCHAIN }}/gcc/bin:$PATH
           export CROSS_COMPILE=aarch64-linux-android-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
-          export LD=ld.lld
           export LLVM=1
           export LLVM_IAS=1
           export TARGET_SOC=s5e8835
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
 
-          # تعطيل حماية سامسونج
+          # custom.config لتعطيل حماية سامسونج
           cat > custom.config << EOF
           CONFIG_UH=n
           CONFIG_UH_RKP=n
@@ -88,50 +110,37 @@ jobs:
           CONFIG_FIVE=n
           EOF
 
-          # استخدم defconfig جهاز A35 (عدل الاسم لو مختلف)
-          DEFCONFIG_NAME="s5e8835-a35xjvxx_defconfig"
-          if [ ! -f "arch/arm64/configs/$DEFCONFIG_NAME" ]; then
-            echo "⚠️ ال defconfig $DEFCONFIG_NAME غير موجود، استخدم أول defconfig موجود"
-            DEFCONFIG_NAME=$(ls arch/arm64/configs/*_defconfig | head -1 | xargs basename)
+          # البحث عن defconfig الصحيح
+          DEFCONFIG=$(ls arch/arm64/configs/*a35*defconfig 2>/dev/null | head -1 | xargs basename)
+          if [ -z "$DEFCONFIG" ]; then
+            DEFCONFIG=$(ls arch/arm64/configs/*defconfig | head -1 | xargs basename)
           fi
-          make $DEFCONFIG_NAME
+          echo "Using defconfig: $DEFCONFIG"
+          make $DEFCONFIG
           scripts/kconfig/merge_config.sh .config custom.config
           scripts/config --file .config -d CONFIG_MODULE_SIG
           scripts/config --file .config -d CONFIG_MODULE_SIG_FORCE
           scripts/config --file .config --set-str CONFIG_LOCALVERSION "-KernelSU"
-          
           make -j$(nproc) Image
-          cp arch/arm64/boot/Image $GITHUB_WORKSPACE/Image
+          cp arch/arm64/boot/Image $GITHUB_WORKSPACE/
 
-      - name: Download boot.img (if URL provided)
+      - name: Download and repack boot.img (optional)
         if: github.event.inputs.boot_img_url != ''
         run: |
           URL="${{ github.event.inputs.boot_img_url }}"
-          # دعم روابط Google Drive المباشرة
           if [[ "$URL" == *"drive.google.com"* ]]; then
             FILE_ID=$(echo "$URL" | grep -o 'id=[^&]*' | cut -d= -f2)
-            if [ -z "$FILE_ID" ]; then
-              FILE_ID=$(echo "$URL" | grep -o 'file/d/[^/]*' | cut -d/ -f3)
-            fi
-            echo "تحميل من Google Drive ID: $FILE_ID"
+            [ -z "$FILE_ID" ] && FILE_ID=$(echo "$URL" | grep -o 'file/d/[^/]*' | cut -d/ -f3)
             gdown --fuzzy "https://drive.google.com/uc?id=$FILE_ID" -O boot.img
           else
             wget -O boot.img "$URL"
           fi
-          # تثبيت gdown لو لزم
-          if ! command -v gdown &> /dev/null; then
-            pip3 install gdown
-          fi
-
-      - name: Create boot.img (if boot.img available)
-        if: github.event.inputs.boot_img_url != '' && steps.download-boot-img.outcome == 'success'
-        run: |
           magiskboot unpack boot.img
           rm -f kernel
           cp $GITHUB_WORKSPACE/Image kernel
           magiskboot repack boot.img
           mv new-boot.img boot-ksu.img
-          tar -cvf boot-ksu.tar boot-ksu.img
+          tar -cf boot-ksu.tar boot-ksu.img
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
