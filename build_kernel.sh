@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# سكريبت بناء نواة Samsung Galaxy A35 مع KernelSU (النسخة النهائية)
+# سكريبت بناء نواة Samsung Galaxy A35 مع KernelSU (الإصدار النهائي المعدل)
 # ============================================================
 
 set -eo pipefail
@@ -37,7 +37,6 @@ log "تم استلام رابط النواة: $KERNEL_URL"
 echo -e "${GREEN}=== المرحلة 1: تثبيت التبعيات الأساسية ===${NC}"
 if [ ! -f "$HOME/.kernel_deps_installed" ]; then
     sudo apt-get update -y
-    # القائمة الشاملة من دليل ravindu644
     sudo apt-get install -y git device-tree-compiler lz4 xz-utils zlib1g-dev openjdk-17-jdk \
         gcc g++ python3 python-is-python3 p7zip-full android-sdk-libsparse-utils erofs-utils \
         default-jdk gnupg flex bison gperf build-essential zip curl libc6-dev libncurses-dev \
@@ -45,7 +44,6 @@ if [ ! -f "$HOME/.kernel_deps_installed" ]; then
         python3-markdown libxml2-utils xsltproc cpio kmod openssl libelf-dev pahole \
         libssl-dev libarchive-tools zstd rsync --fix-missing
     
-    # محاولة تثبيت libtinfo5 (قد لا تكون متاحة في Ubuntu 24.04)
     wget -q http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb -O /tmp/libtinfo5.deb && \
         sudo dpkg -i /tmp/libtinfo5.deb 2>/dev/null || warn "libtinfo5 غير متوفر (قد لا يكون ضرورياً)."
     
@@ -68,27 +66,40 @@ echo -e "${GREEN}=== المرحلة 2: تحميل سلاسل الأدوات ===$
 mkdir -p "$TOOLCHAINS_DIR"
 
 # ------------------------------
-# تحميل Clang من مستودع AOSP الرسمي عبر git clone (طريقة مضمونة)
+# تحميل Clang من رابط مباشر موثوق (مع احتياط)
 # ------------------------------
 if [ ! -d "$TOOLCHAINS_DIR/clang-r450784e" ]; then
-    log "تحميل clang-r450784e من مستودع AOSP الرسمي..."
+    log "تحميل clang-r450784e..."
     cd "$TOOLCHAINS_DIR"
     
-    git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-temp
+    CLANG_URL="https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/clang-r450784e.tar.gz"
+    CLANG_URL_BACKUP="https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r450784e/archive/refs/heads/lineage-20.0.tar.gz"
+    
+    wget --tries=5 --timeout=30 "$CLANG_URL" -O clang.tar.gz || {
+        warn "فشل التحميل من الرابط الأساسي، جاري المحاولة من الرابط الاحتياطي..."
+        wget --tries=5 --timeout=30 "$CLANG_URL_BACKUP" -O clang.tar.gz || error "تعذر تحميل Clang من أي مصدر."
+    }
+    
+    log "فك ضغط Clang..."
+    mkdir -p clang-temp
+    tar -xf clang.tar.gz -C clang-temp
     
     if [ -d "clang-temp/clang-r450784e" ]; then
         mv clang-temp/clang-r450784e ./
-        log "تم استخراج clang-r450784e بنجاح."
+    elif [ -d "clang-temp"/*/clang-r450784e ]; then
+        mv clang-temp/*/clang-r450784e ./
     else
-        error "لم يتم العثور على clang-r450784e في المستودع."
+        mkdir -p clang-r450784e
+        mv clang-temp/* clang-r450784e/
     fi
     
-    rm -rf clang-temp
+    rm -rf clang-temp clang.tar.gz
+    log "تم تحميل clang-r450784e بنجاح."
     cd - >/dev/null
 fi
 
 # ------------------------------
-# تحميل ARM GNU Toolchain من Linaro (مضمون)
+# تحميل ARM GNU Toolchain
 # ------------------------------
 if [ ! -d "$TOOLCHAINS_DIR/arm-gnu-toolchain-14.2" ]; then
     log "تحميل arm-gnu-toolchain-14.2 من Linaro..."
@@ -161,7 +172,6 @@ fi
 [ -f "Kernel.tar.gz" ] && tar -xzf Kernel.tar.gz && rm Kernel.tar.gz
 [ ! -f "Makefile" ] && error "لم يتم العثور على Makefile. تأكد من صحة سورس النواة."
 
-# إصلاح أذونات الملفات
 log "إصلاح أذونات مجلد النواة..."
 chmod -R 755 "$KERNEL_ROOT"
 
@@ -178,16 +188,13 @@ export LLVM_IAS=1
 
 DEFCONFIG="s5e8835-a35xjvxx_defconfig"
 
-# نسخ stock_defconfig قبل التعديل
 if [ -f "arch/arm64/configs/$DEFCONFIG" ] && [ ! -f "arch/arm64/configs/stock_defconfig" ]; then
     cp "arch/arm64/configs/$DEFCONFIG" "arch/arm64/configs/stock_defconfig"
     log "تم نسخ defconfig إلى stock_defconfig لمنع رسالة الخطأ."
 fi
 
-# إزالة جميع ملفات الـ GCC wrappers
 sed -i '/REAL_CC/d; /CFP_CC/d; /wrapper/d' Makefile 2>/dev/null || true
 
-# حقن درع الأخطاء
 log "حقن أوامر تخطي الأخطاء داخل Makefile..."
 if grep -q '^KBUILD_CFLAGS\s*+=' Makefile; then
     sed -i '/^KBUILD_CFLAGS\s*+=/a KBUILD_CFLAGS += -Wno-error -Wno-implicit-int -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-return-type -Wno-int-conversion -Wno-vla' Makefile
@@ -195,12 +202,10 @@ else
     echo "KBUILD_CFLAGS += -Wno-error -Wno-implicit-int -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-return-type -Wno-int-conversion -Wno-vla" >> Makefile
 fi
 
-# مسح -Werror من جميع الملفات
 log "تدمير -Werror من جميع الملفات الفرعية..."
 find . -type f -name "Makefile*" -exec sed -i 's/-Werror//g' {} +
 find . -type f -name "Kbuild*" -exec sed -i 's/-Werror//g' {} +
 
-# خداع النظام لقراءة stock_defconfig
 sed -i 's|scripts/kconfig/conf --olddefconfig Kconfig|scripts/kconfig/conf --olddefconfig --defconfig=arch/arm64/configs/stock_defconfig Kconfig|g' scripts/kconfig/Makefile 2>/dev/null || true
 
 make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- $DEFCONFIG
@@ -235,7 +240,6 @@ if [ -d "$PWD/patches" ]; then
     done
 fi
 
-# باتشات إصلاح أخطاء قديمة (اختياري)
 if [[ "$APPLY_LEGACY_FIXES" == "1" ]]; then
     echo -e "${GREEN}=== المرحلة 7.5: تطبيق باتشات إصلاح النواة القديمة ===${NC}"
     log "تحميل مستودع الباتشات..."
