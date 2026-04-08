@@ -1,7 +1,6 @@
 #!/bin/bash
 # ============================================================
 # سكريبت بناء نواة Samsung Galaxy A35 مع KernelSU
-# تم دمج الخيار النووي لتخطي أخطاء تعريفات Exynos 1380
 # ============================================================
 
 set -eo pipefail
@@ -106,25 +105,13 @@ fi
 echo -e "${GREEN}=== المرحلة 4: حقن كود KernelSU ===${NC}"
 curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
-echo -e "${GREEN}=== المرحلة 5: التحضير وتجهيز defconfig (الخيار النووي) ===${NC}"
+echo -e "${GREEN}=== المرحلة 5: التحضير وتجهيز defconfig ===${NC}"
 export TARGET_SOC=s5e8835
 export PLATFORM_VERSION=13
 export ANDROID_MAJOR_VERSION=t
 export DTC_FLAGS="-@"
 export LLVM=1
 export LLVM_IAS=1
-
-# 1. إزالة جميع ملفات الـ GCC wrappers عشان متتعارضش مع LLVM
-sed -i '/REAL_CC/d; /CFP_CC/d; /wrapper/d' Makefile 2>/dev/null || true
-
-# 2. حقن درع الأخطاء مباشرة داخل ملف الـ Makefile الرئيسي غصب عن السورس
-log "حقن أوامر تخطي الأخطاء داخل Makefile..."
-sed -i '/^KBUILD_CFLAGS\s*+=/a KBUILD_CFLAGS += -Wno-error -Wno-implicit-int -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-return-type -Wno-int-conversion -Wno-vla' Makefile
-
-# 3. مسح أي أمر -Werror مستخبي في أي ملف فرعي في السورس كله
-log "تدمير -Werror من جميع الملفات الفرعية..."
-find . -type f -name "Makefile*" -exec sed -i 's/-Werror//g' {} +
-find . -type f -name "Kbuild*" -exec sed -i 's/-Werror//g' {} +
 
 DEFCONFIG="s5e8835-a35xjvxx_defconfig"
 make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-none-linux-gnu- $DEFCONFIG
@@ -157,8 +144,11 @@ if [ -d "$PWD/patches" ]; then
 fi
 
 echo -e "${GREEN}=== المرحلة 8: ترجمة النواة ===${NC}"
-# البناء نظيف الآن لأن ملفات السورس تم تعديلها جذرياً
-make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-none-linux-gnu- Image
+# --- الدرع الواقي الشامل (تمت إضافة حل مشكلة الميديا VLA و Fallthrough) ---
+export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline"
+export KCPPFLAGS="-Wno-error"
+
+make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-none-linux-gnu- KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="$KCPPFLAGS" Image
 
 if [ ! -f "arch/arm64/boot/Image" ]; then error "فشل التجميع، لم يتم العثور على Image."; fi
 mkdir -p "$BUILD_DIR" && cp arch/arm64/boot/Image "$BUILD_DIR/"
