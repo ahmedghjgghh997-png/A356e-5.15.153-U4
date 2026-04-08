@@ -9,22 +9,43 @@ on:
       boot_url:
         description: 'رابط boot.img الأصلي (اختياري)'
         required: false
+      create_anykernel3:
+        description: 'إنشاء AnyKernel3.zip؟ (y/n)'
+        required: false
+        default: 'n'
 
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 360   # حد أقصى 6 ساعات
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Setup i386 architecture (for multilib)
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+      
+      - name: Cache toolchains
+        id: cache-toolchains
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchains
+          key: toolchains-${{ runner.os }}-clang-r450784e-arm-gnu-14.2-v2
       
       - name: Build kernel
         run: |
           chmod +x build_kernel.sh
-          KERNEL_URL_ENV="${{ github.event.inputs.kernel_url }}" \
-          BOOT_URL_ENV="${{ github.event.inputs.boot_url }}" \
+          export KERNEL_URL_ENV="${{ github.event.inputs.kernel_url }}"
+          export BOOT_URL_ENV="${{ github.event.inputs.boot_url }}"
+          export AK3_CHOICE_ENV="${{ github.event.inputs.create_anykernel3 }}"
           ./build_kernel.sh
           
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: kernel-output
-          path: kernel-source/build/
+          path: |
+            kernel-source/build/
+            !kernel-source/build/**/.git*
+          if-no-files-found: warn   # لا يفشل إذا لم توجد ملفات
