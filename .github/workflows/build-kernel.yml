@@ -45,10 +45,12 @@ jobs:
             wget -O source.file "$URL"
           fi
           
+          # تحديد نوع الملف
           FILE_TYPE=$(file -b --mime-type source.file)
           echo "File type: $FILE_TYPE"
           mkdir -p kernel_source
           
+          # فك الضغط حسب النوع
           case "$FILE_TYPE" in
             application/zip)
               unzip -q source.file -d kernel_source
@@ -63,6 +65,7 @@ jobs:
               tar -xjf source.file -C kernel_source
               ;;
             *)
+              # محاولة tar و unzip كحل أخير
               if tar -xf source.file -C kernel_source 2>/dev/null; then
                 echo "Extracted with tar (fallback)"
               elif unzip -q source.file -d kernel_source 2>/dev/null; then
@@ -75,6 +78,7 @@ jobs:
           esac
           rm source.file
           
+          # التعامل مع المجلد الفرعي الواحد
           cd kernel_source
           if [ $(ls -1 | wc -l) -eq 1 ] && [ -d $(ls -1) ]; then
             SUBDIR=$(ls -1)
@@ -83,6 +87,7 @@ jobs:
           fi
           cd ..
           
+          # البحث عن kernel root
           if [ -d "kernel_source/common" ] && [ -f "kernel_source/common/Makefile" ]; then
             echo "KERNEL_ROOT=$(pwd)/kernel_source/common" >> $GITHUB_ENV
           elif [ -d "kernel_source/kernel-5.15" ] && [ -f "kernel_source/kernel-5.15/Makefile" ]; then
@@ -95,11 +100,11 @@ jobs:
         run: |
           mkdir -p $HOME/tc
           cd $HOME/tc
-          # Clang r450784d من المصدر الرسمي لـ AOSP
-          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz
-          mkdir clang && cd clang && tar -xf ../clang-r450784d.tar.gz && cd ..
-          # GCC من ARM
-          wget -q https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+          # تحميل Clang المناسب من مرايا الدليل
+          wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/clang-r450784e.tar.gz
+          mkdir clang && cd clang && tar -xf ../clang-r450784e.tar.gz && cd ..
+          # تحميل GCC المناسب
+          wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
           mv arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu gcc
           echo "TOOLCHAIN=$HOME/tc" >> $GITHUB_ENV
