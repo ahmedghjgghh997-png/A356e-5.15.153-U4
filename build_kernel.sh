@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# سكريبت بناء نواة Samsung Galaxy A35 مع KernelSU (الإصدار النهائي المعدل)
+# سكريبت بناء نواة Samsung Galaxy A35 مع KernelSU (الإصدار النهائي - ثابت)
 # ============================================================
 
 set -eo pipefail
@@ -99,31 +99,28 @@ if [ ! -d "$TOOLCHAINS_DIR/clang-r450784e" ]; then
 fi
 
 # ------------------------------
-# تحميل ARM GNU Toolchain
+# تحميل ARM GNU Toolchain (من Linaro حصراً)
 # ------------------------------
 if [ ! -d "$TOOLCHAINS_DIR/arm-gnu-toolchain-14.2" ]; then
     log "تحميل arm-gnu-toolchain-14.2 من Linaro..."
     cd "$TOOLCHAINS_DIR"
     
-    wget -q https://releases.linaro.org/components/toolchain/binaries/latest/armv8l-linux-gnueabihf/gcc-linaro-14.2.1-2025.01-x86_64_aarch64-linux-gnu.tar.xz -O gcc-linaro.tar.xz || {
-        warn "فشل تحميل من Linaro، جاري استخدام رابط ARM الرسمي..."
-        wget -q --header="Accept: application/octet-stream" \
-             "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz?rev=..." \
-             -O gcc-arm.tar.xz
+    GCC_URL="https://releases.linaro.org/components/toolchain/binaries/latest/armv8l-linux-gnueabihf/gcc-linaro-14.2.1-2025.01-x86_64_aarch64-linux-gnu.tar.xz"
+    
+    wget --tries=5 --timeout=30 "$GCC_URL" -O gcc.tar.xz || {
+        error "فشل تحميل ARM Toolchain من Linaro بعد عدة محاولات."
     }
     
-    if [ -f gcc-linaro.tar.xz ]; then
-        tar -xf gcc-linaro.tar.xz
-        mv gcc-linaro-* arm-gnu-toolchain-14.2
-        rm gcc-linaro.tar.xz
-    elif [ -f gcc-arm.tar.xz ]; then
-        tar -xf gcc-arm.tar.xz
-        mv arm-gnu-toolchain-* arm-gnu-toolchain-14.2
-        rm gcc-arm.tar.xz
-    else
-        error "تعذر تحميل ARM GNU Toolchain من أي مصدر."
+    if ! tar -tf gcc.tar.xz &>/dev/null; then
+        error "الملف المحمل غير صالح (ليس أرشيف tar.xz)."
     fi
     
+    log "فك ضغط ARM Toolchain..."
+    tar -xf gcc.tar.xz
+    mv gcc-linaro-* arm-gnu-toolchain-14.2
+    rm gcc.tar.xz
+    
+    log "تم تحميل arm-gnu-toolchain-14.2 بنجاح."
     cd - >/dev/null
 fi
 
