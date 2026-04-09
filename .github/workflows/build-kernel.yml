@@ -24,6 +24,7 @@ jobs:
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
           pip3 install gdown
+          sudo apt install -y pahole || sudo ln -s /usr/bin/pahole /usr/local/bin/pahole
 
       - name: Get magiskboot
         run: |
@@ -78,9 +79,18 @@ jobs:
             echo "KERNEL_ROOT=$(pwd)/kernel_source" >> $GITHUB_ENV
           fi
 
-      - name: Patch typedef redefinition
+      - name: Apply radical fixes (remove -Werror, add flags, disable LTO)
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
+          # 1. إزالة أي إشارة -Werror من كل Makefiles و Kbuild files
+          find . -type f \( -name "Makefile*" -o -name "Kbuild*" \) -exec sed -i 's/-Werror//g' {} +
+          
+          # 2. إضافة أعلام التسامح إلى Makefile الرئيسي إذا لم تكن موجودة
+          if ! grep -q "KERNELSU_CFLAGS" Makefile; then
+            sed -i '/^KBUILD_CFLAGS\s*+=/a KBUILD_CFLAGS += -Wno-error -Wno-implicit-int -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-return-type -Wno-int-conversion -Wno-vla -Wno-typedef-redefinition' Makefile
+          fi
+          
+          # 3. تعطيل typedef redefinition في kzt_common.h (احتياطي)
           if [ -f "security/kzt/kzt_common.h" ]; then
             sed -i 's/typedef unsigned int u32;/\/\/ typedef unsigned int u32; \/\/ disabled/g' security/kzt/kzt_common.h
           fi
@@ -111,10 +121,11 @@ jobs:
           export ANDROID_MAJOR_VERSION=v
           export LTO=none
 
-          export SHIELD_FLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-vla -Wno-int-conversion -Wno-return-type -Wno-implicit-fallthrough -fgnu89-inline -fno-stack-protector"
-          export KCFLAGS="$SHIELD_FLAGS"
+          # إضافة أعلام إضافية (احتياطية)
+          export KCFLAGS="-w -Wno-error -fno-stack-protector"
           export KCPPFLAGS="-Wno-error"
 
+          # إنشاء custom.config
           cat > custom.config << EOF
           CONFIG_UH=n
           CONFIG_UH_RKP=n
@@ -125,6 +136,7 @@ jobs:
           CONFIG_SECURITY_DEFEX=n
           CONFIG_PROCA=n
           CONFIG_FIVE=n
+          CONFIG_SENSORHUB=n
           EOF
 
           DEFCONFIG=$(ls arch/arm64/configs/*a35*defconfig 2>/dev/null | head -1 | xargs basename)
@@ -133,7 +145,7 @@ jobs:
           make $DEFCONFIG
           scripts/kconfig/merge_config.sh .config custom.config
           
-          # تعطيل LTO بشكل قاطع
+          # تعطيل LTO و stack protector و BTF
           scripts/config --file .config -d CONFIG_LTO_CLANG
           scripts/config --file .config -d CONFIG_LTO_CLANG_THIN
           scripts/config --file .config -d CONFIG_LTO_CLANG_FULL
@@ -145,13 +157,11 @@ jobs:
           scripts/config --file .config -d CONFIG_MODULE_SIG
           scripts/config --file .config -d CONFIG_MODULE_SIG_FORCE
           scripts/config --file .config --set-str CONFIG_LOCALVERSION "-KernelSU"
-          # تعطيل درايفر sensorhub
-          scripts/config --file .config -d CONFIG_SENSORHUB
           
-          make -j$(nproc) Image KCFLAGS="$SHIELD_FLAGS" KCPPFLAGS="-Wno-error"
+          make -j$(nproc) Image
           cp arch/arm64/boot/Image $GITHUB_WORKSPACE/Image
 
-      - name: Create boot.img (if URL provided)
+      - name: Create boot.img (if boot.img URL provided)
         if: github.event.inputs.boot_img_url != ''
         run: |
           URL="${{ github.event.inputs.boot_img_url }}"
