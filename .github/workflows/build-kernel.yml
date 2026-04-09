@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       source_url:
-        description: 'رابط السورس (GitHub repo, Google Drive, أو رابط مباشر لملف مضغوط)'
+        description: 'رابط السورس (Google Drive أو رابط مباشر لملف مضغوط)'
         required: true
       boot_img_url:
-        description: 'رابط مباشر لـ boot.img (اتركه فارغاً لاستخدام AnyKernel3)'
+        description: 'رابط boot.img (اتركه فارغاً لإنشاء AnyKernel3.zip)'
         required: false
 
 jobs:
@@ -21,10 +21,7 @@ jobs:
             gcc g++ python3 python-is-python3 p7zip-full android-sdk-libsparse-utils erofs-utils \
             build-essential zip curl libc6-dev libncurses-dev bc make cpio kmod openssl \
             libelf-dev libssl-dev zstd rsync wget patch unzip dwarves
-          wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
-          sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
           pip3 install gdown
-          sudo apt install -y pahole || sudo ln -s /usr/bin/pahole /usr/local/bin/pahole
 
       - name: Get magiskboot
         run: |
@@ -40,60 +37,20 @@ jobs:
           URL="${{ github.event.inputs.source_url }}"
           if [[ "$URL" == *"drive.google.com"* ]]; then
             FILE_ID=$(echo "$URL" | grep -oP '(?<=id=)[^&]+' || echo "$URL" | grep -oP '(?<=/d/)[^/]+')
-            echo "Downloading from Google Drive ID: $FILE_ID"
-            gdown --fuzzy "https://drive.google.com/uc?id=$FILE_ID" -O source.file
+            gdown --fuzzy "https://drive.google.com/uc?id=$FILE_ID" -O source.zip
+            unzip -q source.zip -d kernel_source
           else
-            wget -O source.file "$URL"
+            wget -O source.zip "$URL"
+            unzip -q source.zip -d kernel_source
           fi
-          
-          FILE_TYPE=$(file -b --mime-type source.file)
-          mkdir -p kernel_source
-          case "$FILE_TYPE" in
-            application/zip) unzip -q source.file -d kernel_source ;;
-            application/x-tar|application/x-gzip|application/gzip) tar -xf source.file -C kernel_source ;;
-            application/x-xz) tar -xJf source.file -C kernel_source ;;
-            application/x-bzip2) tar -xjf source.file -C kernel_source ;;
-            *)
-              if tar -xf source.file -C kernel_source 2>/dev/null; then
-                echo "Extracted with tar"
-              elif unzip -q source.file -d kernel_source 2>/dev/null; then
-                echo "Extracted with unzip"
-              else
-                cp source.file kernel_source/
-              fi
-              ;;
-          esac
-          rm source.file
-          
           cd kernel_source
+          # إذا كان هناك مجلد فرعي واحد، ننقل محتوياته للأعلى
           if [ $(ls -1 | wc -l) -eq 1 ] && [ -d $(ls -1) ]; then
-            SUBDIR=$(ls -1); mv $SUBDIR/* ./; rmdir $SUBDIR
+            mv $(ls -1)/* ./
+            rmdir $(ls -1)
           fi
           cd ..
-          
-          if [ -d "kernel_source/common" ] && [ -f "kernel_source/common/Makefile" ]; then
-            echo "KERNEL_ROOT=$(pwd)/kernel_source/common" >> $GITHUB_ENV
-          elif [ -d "kernel_source/kernel-5.15" ] && [ -f "kernel_source/kernel-5.15/Makefile" ]; then
-            echo "KERNEL_ROOT=$(pwd)/kernel_source/kernel-5.15" >> $GITHUB_ENV
-          else
-            echo "KERNEL_ROOT=$(pwd)/kernel_source" >> $GITHUB_ENV
-          fi
-
-      - name: Apply radical fixes (remove -Werror, add flags, disable LTO)
-        working-directory: ${{ env.KERNEL_ROOT }}
-        run: |
-          # 1. إزالة أي إشارة -Werror من كل Makefiles و Kbuild files
-          find . -type f \( -name "Makefile*" -o -name "Kbuild*" \) -exec sed -i 's/-Werror//g' {} +
-          
-          # 2. إضافة أعلام التسامح إلى Makefile الرئيسي إذا لم تكن موجودة
-          if ! grep -q "KERNELSU_CFLAGS" Makefile; then
-            sed -i '/^KBUILD_CFLAGS\s*+=/a KBUILD_CFLAGS += -Wno-error -Wno-implicit-int -Wno-strict-prototypes -Wno-implicit-function-declaration -Wno-return-type -Wno-int-conversion -Wno-vla -Wno-typedef-redefinition' Makefile
-          fi
-          
-          # 3. تعطيل typedef redefinition في kzt_common.h (احتياطي)
-          if [ -f "security/kzt/kzt_common.h" ]; then
-            sed -i 's/typedef unsigned int u32;/\/\/ typedef unsigned int u32; \/\/ disabled/g' security/kzt/kzt_common.h
-          fi
+          echo "KERNEL_ROOT=$(pwd)/kernel_source" >> $GITHUB_ENV
 
       - name: Setup toolchains
         run: |
@@ -121,11 +78,14 @@ jobs:
           export ANDROID_MAJOR_VERSION=v
           export LTO=none
 
-          # إضافة أعلام إضافية (احتياطية)
-          export KCFLAGS="-w -Wno-error -fno-stack-protector"
+          # أعلام بسيطة لتجاوز التحذيرات (بدون تعقيد)
+          export KCFLAGS="-Wno-error -Wno-typedef-redefinition"
           export KCPPFLAGS="-Wno-error"
 
-          # إنشاء custom.config
+          # إضافة KernelSU
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+
+          # تعطيل الحماية الأساسية و sensorhub
           cat > custom.config << EOF
           CONFIG_UH=n
           CONFIG_UH_RKP=n
@@ -139,54 +99,44 @@ jobs:
           CONFIG_SENSORHUB=n
           EOF
 
-          DEFCONFIG=$(ls arch/arm64/configs/*a35*defconfig 2>/dev/null | head -1 | xargs basename)
-          [ -z "$DEFCONFIG" ] && DEFCONFIG=$(ls arch/arm64/configs/*_defconfig | head -1 | xargs basename)
-          echo "Using defconfig: $DEFCONFIG"
+          DEFCONFIG="s5e8835-a35xjvxx_defconfig"
           make $DEFCONFIG
           scripts/kconfig/merge_config.sh .config custom.config
-          
-          # تعطيل LTO و stack protector و BTF
           scripts/config --file .config -d CONFIG_LTO_CLANG
           scripts/config --file .config -d CONFIG_LTO_CLANG_THIN
           scripts/config --file .config -d CONFIG_LTO_CLANG_FULL
           scripts/config --file .config -e CONFIG_LTO_NONE
-          scripts/config --file .config -d CONFIG_STACKPROTECTOR
-          scripts/config --file .config -d CONFIG_STACKPROTECTOR_STRONG
-          scripts/config --file .config -d CONFIG_STACKPROTECTOR_PER_TASK
           scripts/config --file .config -d CONFIG_DEBUG_INFO_BTF
           scripts/config --file .config -d CONFIG_MODULE_SIG
           scripts/config --file .config -d CONFIG_MODULE_SIG_FORCE
           scripts/config --file .config --set-str CONFIG_LOCALVERSION "-KernelSU"
-          
+
           make -j$(nproc) Image
           cp arch/arm64/boot/Image $GITHUB_WORKSPACE/Image
 
-      - name: Create boot.img (if boot.img URL provided)
-        if: github.event.inputs.boot_img_url != ''
+      - name: Create AnyKernel3.zip (or boot.img)
         run: |
-          URL="${{ github.event.inputs.boot_img_url }}"
-          if [[ "$URL" == *"drive.google.com"* ]]; then
-            FILE_ID=$(echo "$URL" | grep -oP '(?<=id=)[^&]+' || echo "$URL" | grep -oP '(?<=/d/)[^/]+')
-            gdown --fuzzy "https://drive.google.com/uc?id=$FILE_ID" -O boot.img
+          if [ -n "${{ github.event.inputs.boot_img_url }}" ]; then
+            URL="${{ github.event.inputs.boot_img_url }}"
+            if [[ "$URL" == *"drive.google.com"* ]]; then
+              FILE_ID=$(echo "$URL" | grep -oP '(?<=id=)[^&]+' || echo "$URL" | grep -oP '(?<=/d/)[^/]+')
+              gdown --fuzzy "https://drive.google.com/uc?id=$FILE_ID" -O boot.img
+            else
+              wget -O boot.img "$URL"
+            fi
+            magiskboot unpack boot.img
+            rm -f kernel
+            cp $GITHUB_WORKSPACE/Image kernel
+            magiskboot repack boot.img
+            mv new-boot.img boot-ksu.img
+            tar -cf boot-ksu.tar boot-ksu.img
           else
-            wget -O boot.img "$URL"
+            git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+            cp $GITHUB_WORKSPACE/Image AnyKernel3/
+            cd AnyKernel3
+            zip -r9 ../AnyKernel3-$(date +%Y%m%d-%H%M%S).zip . -x ".git*" "README.md" "*.zip"
+            cd ..
           fi
-          magiskboot unpack boot.img
-          rm -f kernel
-          cp $GITHUB_WORKSPACE/Image kernel
-          magiskboot repack boot.img
-          mv new-boot.img boot-ksu.img
-          tar -cf boot-ksu.tar boot-ksu.img
-
-      - name: Create AnyKernel3.zip (if no boot.img)
-        if: github.event.inputs.boot_img_url == ''
-        run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
-          cp $GITHUB_WORKSPACE/Image AnyKernel3/
-          cd AnyKernel3
-          zip -r9 ../AnyKernel3-$(date +%Y%m%d-%H%M%S).zip . -x ".git*" "README.md" "*.zip"
-          cd ..
-          cp *.zip $GITHUB_WORKSPACE/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
